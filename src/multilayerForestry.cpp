@@ -20,6 +20,8 @@ multilayerForestry::multilayerForestry(
   bool replace,
   size_t sampSize,
   double splitRatio,
+  bool OOBhonest,
+  bool doubleBootstrap,
   size_t mtry,
   size_t minNodeSizeSpt,
   size_t minNodeSizeAvg,
@@ -43,6 +45,8 @@ multilayerForestry::multilayerForestry(
   this->_replace = replace;
   this->_sampSize = sampSize;
   this->_splitRatio = splitRatio;
+  this->_OOBhonest = OOBhonest;
+  this->_doubleBootstrap = doubleBootstrap;
   this->_mtry = mtry;
   this->_minNodeSizeAvg = minNodeSizeAvg;
   this->_minNodeSizeSpt = minNodeSizeSpt;
@@ -126,7 +130,8 @@ void multilayerForestry::addForests(size_t ntree) {
       std::move(residualdeepFeatureWeights_),
       std::move(residualdeepFeatureWeightsVariables_),
       std::move(residualobservationWeights_),
-      std::move(monotonicConstraintsRcpp_)
+      std::move(monotonicConstraintsRcpp_),
+      false
     );
 
     forestry *residualForest = new forestry(
@@ -135,6 +140,8 @@ void multilayerForestry::addForests(size_t ntree) {
       _replace,
       _sampSize,
       _splitRatio,
+      _OOBhonest,
+      _doubleBootstrap,
       _mtry,
       _minNodeSizeSpt,
       _minNodeSizeAvg,
@@ -168,7 +175,10 @@ void multilayerForestry::addForests(size_t ntree) {
                               NULL,
                               NULL,
                               _seed,
-                              1);
+                              1,
+                              false,
+                              false,
+                              NULL);
 
     // Calculate and store best gamma value
     // std::vector<double> bestPredictedResiduals(trainingData->getNumRows());
@@ -223,7 +233,9 @@ void multilayerForestry::addForests(size_t ntree) {
 std::unique_ptr< std::vector<double> > multilayerForestry::predict(
     std::vector< std::vector<double> >* xNew,
     arma::Mat<double>* weightMatrix,
-    int seed
+    int seed,
+    size_t nthread,
+    bool exact
 ) {
   std::vector< forestry* > multilayerForests = *getMultilayerForests();
   std::vector<double> gammas = getGammas();
@@ -236,7 +248,10 @@ std::unique_ptr< std::vector<double> > multilayerForestry::predict(
                                   weightMatrix,
                                   NULL,
                                   seed,
-                                  this->getNthread());
+                                  nthread,
+                                  exact,
+                                  false,
+                                  NULL);
 
   std::vector<double> prediction(initialPrediction->size(), getMeanOutcome());
 
@@ -253,7 +268,10 @@ std::unique_ptr< std::vector<double> > multilayerForestry::predict(
                                     weightMatrix,
                                     NULL,
                                     seed,
-                                    this->getNthread());
+                                    nthread,
+                                    exact,
+                                    false,
+                                    NULL);
 
     std::transform(predictedResiduals->begin(), predictedResiduals->end(),
                    predictedResiduals->begin(), std::bind(std::multiplies<double>(), gammas[i], std::placeholders::_1));

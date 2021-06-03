@@ -75,7 +75,7 @@ monotone_rf <- forestry(x = data_train[,-3],
                         nthread = 1,
                         ntree = 25)
                         
-predict(monotone_rf, feature.new = data_train[,-3])
+predict(monotone_rf, newdata = data_train[,-3])
 ```
 
 
@@ -98,10 +98,10 @@ rf <- forestry(x = iris[,-1],
                ntree = 500)
 
 # Get the OOB predictions for the training set
-oob_preds <- getOOBpreds(rf)
+oob_preds <- predict(rf, aggregation = "oob")
 
 # This should be equal to the OOB error
-sum((oob_preds -  iris[,1])^2)
+mean((oob_preds -  iris[,1])^2)
 getOOB(rf)
 ```
 

@@ -60,7 +60,8 @@ public:
     DataFrame* trainingData,
     arma::Mat<double>* weightMatrix = NULL,
     bool linear = false,
-    unsigned int seed = 44
+    unsigned int seed = 44,
+    size_t nodesizeStrictAvg = 1
   );
 
   std::unique_ptr<tree_info> getTreeInfo(
@@ -117,26 +118,27 @@ public:
   );
 
   void selectBestFeature(
-    size_t& bestSplitFeature,
-    double& bestSplitValue,
-    double& bestSplitLoss,
-    arma::Mat<double> &bestSplitGL,
-    arma::Mat<double> &bestSplitGR,
-    arma::Mat<double> &bestSplitSL,
-    arma::Mat<double> &bestSplitSR,
-    std::vector<size_t>* featureList,
-    std::vector<size_t>* averagingSampleIndex,
-    std::vector<size_t>* splittingSampleIndex,
-    DataFrame* trainingData,
-    std::mt19937_64& random_number_generator,
-    bool splitMiddle,
-    size_t maxObs,
-    bool linear,
-    double overfitPenalty,
-    std::shared_ptr< arma::Mat<double> > gtotal,
-    std::shared_ptr< arma::Mat<double> > stotal,
-    bool monotone_splits,
-    monotonic_info &monotone_details
+      size_t &bestSplitFeature,
+      double &bestSplitValue,
+      double &bestSplitLoss,
+      int &bestSplitNaDir,
+      arma::Mat<double> &bestSplitGL,
+      arma::Mat<double> &bestSplitGR,
+      arma::Mat<double> &bestSplitSL,
+      arma::Mat<double> &bestSplitSR,
+      std::vector<size_t>* featureList,
+      std::vector<size_t>* averagingSampleIndex,
+      std::vector<size_t>* splittingSampleIndex,
+      DataFrame* trainingData,
+      std::mt19937_64& random_number_generator,
+      bool splitMiddle,
+      size_t maxObs,
+      bool linear,
+      double overfitPenalty,
+      std::shared_ptr< arma::Mat<double> > gtotal,
+      std::shared_ptr< arma::Mat<double> > stotal,
+      bool monotone_splits,
+      monotonic_info &monotone_details
   );
 
   void initializelinear(
@@ -156,10 +158,24 @@ public:
     size_t nRows
   );
 
+  void getDoubleOOBIndex(
+      std::vector<size_t> &outputOOBIndex,
+      size_t nRows
+  );
+
+  void getOOBhonestIndex(
+      std::vector<size_t> &outputOOBIndex,
+      size_t nRows
+  );
+
   void getOOBPrediction(
     std::vector<double> &outputOOBPrediction,
     std::vector<size_t> &outputOOBCount,
-    DataFrame* trainingData
+    DataFrame* trainingData,
+    bool OOBhonest,
+    bool doubleOOB,
+    size_t nodesizeStrictAvg,
+    std::vector< std::vector<double> >* xNew
   );
 
   void getShuffledOOBPrediction(
@@ -167,7 +183,8 @@ public:
       std::vector<size_t> &outputOOBCount,
       DataFrame* trainingData,
       size_t shuffleFeature,
-      std::mt19937_64& random_number_generator
+      std::mt19937_64& random_number_generator,
+      size_t nodesizeStrictAvg
   );
 
   size_t getMtry() {

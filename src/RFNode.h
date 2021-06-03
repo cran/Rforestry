@@ -27,6 +27,7 @@ public:
     double splitValue,
     std::unique_ptr< RFNode > leftChild,
     std::unique_ptr< RFNode > rightChild,
+    std::unique_ptr< std::vector<size_t> > averagingSampleIndex,
     size_t naLeftCount,
     size_t naRightCount
   );
@@ -48,7 +49,8 @@ public:
     arma::Mat<double>* weightMatrix,
     bool linear,
     double lambda,
-    unsigned int seed
+    unsigned int seed,
+    size_t nodesizeStrictAvg
   );
 
   void write_node_info(

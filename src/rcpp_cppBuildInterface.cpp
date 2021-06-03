@@ -40,7 +40,8 @@ SEXP rcpp_cppDataFrameInterface(
     Rcpp::NumericVector deepFeatureWeights,
     Rcpp::NumericVector deepFeatureWeightsVariables,
     Rcpp::NumericVector observationWeights,
-    Rcpp::NumericVector monotonicConstraints
+    Rcpp::NumericVector monotonicConstraints,
+    bool monotoneAvg
 ){
 
   try {
@@ -119,7 +120,8 @@ SEXP rcpp_cppDataFrameInterface(
         std::move(deepFeatureWeightsRcpp),
         std::move(deepFeatureWeightsVariablesRcpp),
         std::move(observationWeightsRcpp),
-        std::move(monotonicConstraintsRcpp)
+        std::move(monotonicConstraintsRcpp),
+        (bool) monotoneAvg
     );
 
     Rcpp::XPtr<DataFrame> ptr(trainingData, true) ;
@@ -147,6 +149,8 @@ SEXP rcpp_cppBuildInterface(
   int sampsize,
   int mtry,
   double splitratio,
+  bool OOBhonest,
+  bool doubleBootstrap,
   int nodesizeSpl,
   int nodesizeAvg,
   int nodesizeStrictSpl,
@@ -165,6 +169,7 @@ SEXP rcpp_cppBuildInterface(
   Rcpp::NumericVector deepFeatureWeightsVariables,
   Rcpp::NumericVector observationWeights,
   Rcpp::NumericVector monotonicConstraints,
+  bool monotoneAvg,
   bool hasNas,
   bool linear,
   double overfitPenalty,
@@ -184,6 +189,8 @@ SEXP rcpp_cppBuildInterface(
         replace,
         (size_t) sampsize,
         splitratio,
+        OOBhonest,
+        doubleBootstrap,
         (size_t) mtry,
         (size_t) nodesizeSpl,
         (size_t) nodesizeAvg,
@@ -295,7 +302,8 @@ SEXP rcpp_cppBuildInterface(
           std::move(deepFeatureWeightsRcpp),
           std::move(deepFeatureWeightsVariablesRcpp),
           std::move(observationWeightsRcpp),
-          std::move(monotoneConstraintsRcpp)
+          std::move(monotoneConstraintsRcpp),
+          (bool) monotoneAvg
       );
 
       forestry* testFullForest = new forestry(
@@ -304,6 +312,8 @@ SEXP rcpp_cppBuildInterface(
         replace,
         (size_t) sampsize,
         splitratio,
+        OOBhonest,
+        doubleBootstrap,
         (size_t) mtry,
         (size_t) nodesizeSpl,
         (size_t) nodesizeAvg,
@@ -356,6 +366,8 @@ SEXP rcpp_cppMultilayerBuildInterface(
     int sampsize,
     int mtry,
     double splitratio,
+    bool OOBhonest,
+    bool doubleBootstrap,
     int nodesizeSpl,
     int nodesizeAvg,
     int nodesizeStrictSpl,
@@ -393,6 +405,8 @@ SEXP rcpp_cppMultilayerBuildInterface(
         replace,
         (size_t) sampsize,
         splitratio,
+        OOBhonest,
+        doubleBootstrap,
         (size_t) mtry,
         (size_t) nodesizeSpl,
         (size_t) nodesizeAvg,
@@ -435,7 +449,11 @@ Rcpp::List rcpp_cppPredictInterface(
   SEXP forest,
   Rcpp::List x,
   std::string aggregation,
-  int seed
+  int seed,
+  int nthread,
+  bool exact,
+  bool use_weights,
+  Rcpp::NumericVector tree_weights
 ){
   try {
 
@@ -449,7 +467,43 @@ Rcpp::List rcpp_cppPredictInterface(
     // then we inialize the empty weight matrix
     arma::Mat<double> weightMatrix;
     arma::Mat<int> terminalNodes;
-    if(aggregation == "weightMatrix") {
+
+    // Have to keep track of tree_weights
+    std::vector<size_t>* testForestTreeWeights;
+    std::vector<size_t> weights;
+
+    // If we have weights we want to initialize them.
+    weights = Rcpp::as< std::vector<size_t> >(tree_weights);
+    testForestTreeWeights =
+      new std::vector<size_t> (weights);
+
+
+    size_t threads_to_use;
+    if (nthread == 0) {
+      threads_to_use = testFullForest->getNthread();
+    } else {
+      threads_to_use = (size_t) nthread;
+    }
+
+    if (aggregation == "weightMatrix") {
+      size_t nrow = featureData[0].size(); // number of features to be predicted
+      size_t ncol = (*testFullForest).getNtrain(); // number of train data
+      weightMatrix.resize(nrow, ncol); // initialize the space for the matrix
+      weightMatrix.zeros(nrow, ncol);  // set it all to 0
+
+      // In this version, we pass NULL for terminalNodes, and the created weight
+      // matrix for weightMatrix. This speeds stuff up considerably if we want
+      // to run just weightMatrix without terminal nodes (especially on large datasets)
+      testForestPrediction = (*testFullForest).predict(&featureData,
+                                                       &weightMatrix,
+                                                       NULL,
+                                                       seed,
+                                                       threads_to_use,
+                                                       exact,
+                                                       false,
+                                                       NULL);
+    } else if (aggregation == "terminalNodes") {
+      // In this case, we return both the terminal nodes, and the weightMatrix
       size_t nrow = featureData[0].size(); // number of features to be predicted
       size_t ncol = (*testFullForest).getNtrain(); // number of train data
       weightMatrix.resize(nrow, ncol); // initialize the space for the matrix
@@ -460,23 +514,30 @@ Rcpp::List rcpp_cppPredictInterface(
       // then parse the sparse form in R
       ncol = (*testFullForest).getNtree();  // Total nodes across the forest
       nrow = featureData[1].size()+1;   // Total feature.new observations
-                                        // Bottom row is the total node count/tree
+      // Bottom row is the total node count/tree
+
 
       terminalNodes.resize(nrow, ncol);
       terminalNodes.zeros(nrow, ncol);
       // The idea is that, if the weightMatrix is point to NULL it won't be
       // be updated, but otherwise it will be updated:
       testForestPrediction = (*testFullForest).predict(&featureData,
-                                                       &weightMatrix,
-                                                       &terminalNodes,
-                                                       seed,
-                                                       testFullForest->getNthread());
+                              &weightMatrix,
+                              &terminalNodes,
+                              seed,
+                              threads_to_use,
+                              exact,
+                              false,
+                              NULL);
     } else {
       testForestPrediction = (*testFullForest).predict(&featureData,
                                                        NULL,
                                                        NULL,
                                                        seed,
-                                                       testFullForest->getNthread());
+                                                       threads_to_use,
+                                                       exact,
+                                                       use_weights,
+                                                       use_weights ? testForestTreeWeights : NULL);
     }
 
     std::vector<double>* testForestPrediction_ =
@@ -503,7 +564,9 @@ Rcpp::List rcpp_cppMultilayerPredictInterface(
     SEXP multilayerForest,
     Rcpp::List x,
     std::string aggregation,
-    int seed
+    int seed,
+    int nthread,
+    bool exact
 ){
   try {
 
@@ -513,6 +576,13 @@ Rcpp::List rcpp_cppMultilayerPredictInterface(
       Rcpp::as< std::vector< std::vector<double> > >(x);
 
     std::unique_ptr< std::vector<double> > testMultiForestPrediction;
+
+    size_t threads_to_use;
+    if (nthread == 0) {
+      threads_to_use = testMultiForest->getNthread();
+    } else {
+      threads_to_use = (size_t) nthread;
+    }
     // We always initialize the weightMatrix. If the aggregation is weightMatrix
     // then we inialize the empty weight matrix
     arma::Mat<double> weightMatrix;
@@ -524,9 +594,17 @@ Rcpp::List rcpp_cppMultilayerPredictInterface(
 
       // The idea is that, if the weightMatrix is point to NULL it won't be
       // be updated, but otherwise it will be updated:
-      testMultiForestPrediction = (*testMultiForest).predict(&featureData, &weightMatrix, seed);
+      testMultiForestPrediction = (*testMultiForest).predict(&featureData,
+                                                             &weightMatrix,
+                                                             seed,
+                                                             threads_to_use,
+                                                             exact);
     } else {
-      testMultiForestPrediction = (*testMultiForest).predict(&featureData, NULL, seed);
+      testMultiForestPrediction = (*testMultiForest).predict(&featureData,
+                                                             NULL,
+                                                             seed,
+                                                             threads_to_use,
+                                                             exact);
     }
 
     std::vector<double>* testMultiForestPrediction_ =
@@ -567,19 +645,42 @@ double rcpp_OBBPredictInterface(
 
 // [[Rcpp::export]]
 Rcpp::NumericVector rcpp_OBBPredictionsInterface(
-    SEXP forest
+    SEXP forest,
+    Rcpp::List x,
+    bool existing_df,
+    bool doubleOOB
 ){
+  // Then we predict with the feature.new data
+  if (existing_df) {
+    std::vector< std::vector<double> > featureData =
+      Rcpp::as< std::vector< std::vector<double> > >(x);
 
-  try {
-    Rcpp::XPtr< forestry > testFullForest(forest) ;
-    std::vector<double> OOBpreds = (*testFullForest).getOOBpreds();
-    Rcpp::NumericVector wrapped_preds = Rcpp::wrap(OOBpreds);
-    return wrapped_preds;
-  } catch(std::runtime_error const& err) {
-    forward_exception_to_r(err);
-  } catch(...) {
-    ::Rf_error("c++ exception (unknown reason)");
+    try {
+      Rcpp::XPtr< forestry > testFullForest(forest) ;
+      std::vector<double> OOBpreds = (*testFullForest).predictOOB(&featureData,
+                                                                  doubleOOB);
+      Rcpp::NumericVector wrapped_preds = Rcpp::wrap(OOBpreds);
+      return wrapped_preds;
+    } catch(std::runtime_error const& err) {
+      forward_exception_to_r(err);
+    } catch(...) {
+      ::Rf_error("c++ exception (unknown reason)");
+    }
+
+  // Otherwise we predict with just the in sample data
+  } else {
+    try {
+      Rcpp::XPtr< forestry > testFullForest(forest) ;
+      std::vector<double> OOBpreds = (*testFullForest).getOOBpreds(doubleOOB);
+      Rcpp::NumericVector wrapped_preds = Rcpp::wrap(OOBpreds);
+      return wrapped_preds;
+    } catch(std::runtime_error const& err) {
+      forward_exception_to_r(err);
+    } catch(...) {
+      ::Rf_error("c++ exception (unknown reason)");
+    }
   }
+
   return Rcpp::NumericVector::get_na() ;
 }
 
@@ -885,6 +986,8 @@ Rcpp::List rcpp_reconstructree(
   bool replace,
   int sampsize,
   double splitratio,
+  bool OOBhonest,
+  bool doubleBootstrap,
   int mtry,
   int nodesizeSpl,
   int nodesizeAvg,
@@ -904,6 +1007,7 @@ Rcpp::List rcpp_reconstructree(
   Rcpp::NumericVector deepFeatureWeightsVariables,
   Rcpp::NumericVector observationWeights,
   Rcpp::NumericVector monotonicConstraints,
+  bool monotoneAvg,
   bool hasNas,
   bool linear,
   double overfitPenalty,
@@ -1054,7 +1158,8 @@ Rcpp::List rcpp_reconstructree(
     std::move(deepFeatureWeightsRcpp),
     std::move(deepFeatureWeightsVariablesRcpp),
     std::move(observationWeightsRcpp),
-    std::move(monotonicConstraintsRcpp)
+    std::move(monotonicConstraintsRcpp),
+    (bool) monotoneAvg
   );
 
   forestry* testFullForest = new forestry(
@@ -1063,6 +1168,8 @@ Rcpp::List rcpp_reconstructree(
     (bool) replace,
     (int) sampsize,
     (double) splitratio,
+    (bool) OOBhonest,
+    (bool) doubleBootstrap,
     (int) mtry,
     (int) nodesizeSpl,
     (int) nodesizeAvg,
@@ -1120,6 +1227,8 @@ Rcpp::List rcpp_reconstruct_forests(
     bool replace,
     int sampsize,
     double splitratio,
+    bool OOBhonest,
+    bool doubleBootstrap,
     int mtry,
     int nodesizeSpl,
     int nodesizeAvg,
@@ -1139,6 +1248,7 @@ Rcpp::List rcpp_reconstruct_forests(
     Rcpp::NumericVector observationWeights,
     Rcpp::NumericVector monotonicConstraints,
     Rcpp::NumericVector gammas,
+    bool monotoneAvg,
     bool linear,
     double overfitPenalty,
     bool doubleTree
@@ -1330,7 +1440,8 @@ Rcpp::List rcpp_reconstruct_forests(
       std::move(deepFeatureWeightsRcpp),
       std::move(deepFeatureWeightsVariablesRcpp),
       std::move(observationWeightsRcpp),
-      std::move(monotonicConstraintsRcpp)
+      std::move(monotonicConstraintsRcpp),
+      (bool) monotoneAvg
     );
 
     // std::cout << "Making a forest \n";
@@ -1342,6 +1453,8 @@ Rcpp::List rcpp_reconstruct_forests(
       (bool) replace,
       (int) sampsize,
       (double) splitratio,
+      (bool) OOBhonest,
+      (bool) doubleBootstrap,
       (int) mtry,
       (int) nodesizeSpl,
       (int) nodesizeAvg,
@@ -1456,7 +1569,8 @@ Rcpp::List rcpp_reconstruct_forests(
     std::move(deepFeatureWeightsRcpp),
     std::move(deepFeatureWeightsVariablesRcpp),
     std::move(observationWeightsRcpp),
-    std::move(monotonicConstraintsRcpp)
+    std::move(monotonicConstraintsRcpp),
+    (bool) monotoneAvg
   );
 
 
@@ -1471,6 +1585,8 @@ Rcpp::List rcpp_reconstruct_forests(
     (bool) replace,
     (int) sampsize,
     (double) splitratio,
+    (bool) OOBhonest,
+    (bool) doubleBootstrap,
     (size_t) mtry,
     (size_t) nodesizeSpl,
     (size_t) nodesizeAvg,
@@ -1535,7 +1651,10 @@ std::vector< std::vector<double> > rcpp_cppImputeInterface(
                                                    &weightMatrix,
                                                    NULL,
                                                    seed,
-                                                   testFullForest->getNthread());
+                                                   testFullForest->getNthread(),
+                                                   false,
+                                                   false,
+                                                   NULL);
 
   std::vector<double>* testForestPrediction_ =
     new std::vector<double>(*testForestPrediction.get());
