@@ -169,12 +169,11 @@ forestryTree::forestryTree(
                                       [](int i) { return i==0; });;
   struct monotonic_info monotonic_details;
 
-  if (monotone_splits) {
-    monotonic_details.monotonic_constraints = (*trainingData->getMonotonicConstraints());
-    monotonic_details.upper_bound = std::numeric_limits<double>::max();
-    monotonic_details.lower_bound = -std::numeric_limits<double>::max();
-    monotonic_details.monotoneAvg = trainingData->getMonotoneAvg();
-  }
+  monotonic_details.monotonic_constraints = (*trainingData->getMonotonicConstraints());
+  monotonic_details.upper_bound = std::numeric_limits<double>::max();
+  monotonic_details.lower_bound = -std::numeric_limits<double>::max();
+  monotonic_details.monotoneAvg = (bool) trainingData->getMonotoneAvg();
+
 
   /* Recursively grow the tree */
   recursivePartition(
@@ -224,6 +223,7 @@ void forestryTree::setDummyTree(
 void forestryTree::predict(
     std::vector<double> &outputPrediction,
     std::vector<int>* terminalNodes,
+    std::vector< std::vector<double> > &outputCoefficients,
     std::vector< std::vector<double> >* xNew,
     DataFrame* trainingData,
     arma::Mat<double>* weightMatrix,
@@ -241,8 +241,17 @@ void forestryTree::predict(
   std::vector<size_t> updateIndex(outputPrediction.size());
   rangeGenerator _rangeGenerator(0);
   std::generate(updateIndex.begin(), updateIndex.end(), _rangeGenerator);
-  (*getRoot()).predict(outputPrediction, terminalNodes, &updateIndex, xNew, trainingData,
-   weightMatrix, linear, getOverfitPenalty(), seed, nodesizeStrictAvg);
+  (*getRoot()).predict(outputPrediction,
+                       terminalNodes,
+                       outputCoefficients,
+                       &updateIndex,
+                       xNew,
+                       trainingData,
+                       weightMatrix,
+                       linear,
+                       getOverfitPenalty(),
+                       seed,
+                       nodesizeStrictAvg);
   //Rcpp::Rcout << "Seed is" << seed << ".\n";
 }
 
@@ -1267,6 +1276,7 @@ void forestryTree::getOOBPrediction(
 
   std::vector<double> currentTreePrediction(OOBIndex.size());
   std::vector<int>* currentTreeTerminalNodes = nullptr;
+  std::vector< std::vector<double> > currentTreeCoefficients(OOBIndex.size());
 
   std::vector< std::vector<double> > xnew(trainingData->getNumColumns());
 
@@ -1286,6 +1296,7 @@ void forestryTree::getOOBPrediction(
   predict(
     currentTreePrediction,
     currentTreeTerminalNodes,
+    currentTreeCoefficients,
     &xnew,
     trainingData,
     NULL,
@@ -1329,6 +1340,7 @@ void forestryTree::getShuffledOOBPrediction(
 
     // Predict current oob sample
     std::vector<double> currentTreePrediction(1);
+    std::vector< std::vector<double> > currentTreeCoefficients(1);
     std::vector<int>* currentTreeTerminalNodes = nullptr;
     std::vector<double> OOBSampleObservation((*trainingData).getNumColumns());
     (*trainingData).getShuffledObservationData(OOBSampleObservation,
@@ -1346,6 +1358,7 @@ void forestryTree::getShuffledOOBPrediction(
     predict(
       currentTreePrediction,
       currentTreeTerminalNodes,
+      currentTreeCoefficients,
       &OOBSampleObservation_,
       trainingData,
       NULL,
@@ -1377,6 +1390,9 @@ std::unique_ptr<tree_info> forestryTree::getTreeInfo(
     treeInfo->splittingSampleIndex.push_back((*_splittingSampleIndex)[i] + 1);
   }
 
+  // set seed of the current tree
+  treeInfo->seed = getSeed();
+
   return treeInfo;
 }
 
@@ -1392,6 +1408,7 @@ void forestryTree::reconstruct_tree(
     bool hasNas,
     bool linear,
     double overfitPenalty,
+    unsigned int seed,
     std::vector<size_t> categoricalFeatureColsRcpp,
     std::vector<int> var_ids,
     std::vector<double> split_vals,
@@ -1416,6 +1433,7 @@ void forestryTree::reconstruct_tree(
   _linear = linear;
   _overfitPenalty = overfitPenalty;
   _nodeCount = 0;
+  _seed = seed;
 
   _averagingSampleIndex = std::unique_ptr< std::vector<size_t> > (
     new std::vector<size_t>

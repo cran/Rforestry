@@ -48,6 +48,7 @@ public:
   std::unique_ptr< std::vector<double> > predict(
     std::vector< std::vector<double> >* xNew,
     arma::Mat<double>* weightMatrix,
+    arma::Mat<double>* coefficients,
     arma::Mat<int>* terminalNodes,
     unsigned int seed,
     size_t nthread,
@@ -67,6 +68,7 @@ public:
 
   void reconstructTrees(
       std::unique_ptr< std::vector<size_t> > & categoricalFeatureColsRcpp,
+      std::unique_ptr< std::vector<unsigned int> > & tree_seeds,
       std::unique_ptr< std::vector< std::vector<int> >  > & var_ids,
       std::unique_ptr< std::vector< std::vector<double> >  > & split_vals,
       std::unique_ptr< std::vector< std::vector<int> >  > & naLeftCounts,

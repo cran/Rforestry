@@ -56,6 +56,7 @@ public:
   void predict(
     std::vector<double> &outputPrediction,
     std::vector<int>* terminalNodes,
+    std::vector< std::vector<double> > &outputCoefficients,
     std::vector< std::vector<double> >* xNew,
     DataFrame* trainingData,
     arma::Mat<double>* weightMatrix = NULL,
@@ -80,6 +81,7 @@ public:
       bool hasNas,
       bool linear,
       double overfitPenalty,
+      unsigned int seed,
       std::vector<size_t> categoricalFeatureColsRcpp,
       std::vector<int> var_ids,
       std::vector<double> split_vals,
