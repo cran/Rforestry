@@ -41,6 +41,7 @@ SEXP rcpp_cppDataFrameInterface(
     Rcpp::NumericVector deepFeatureWeightsVariables,
     Rcpp::NumericVector observationWeights,
     Rcpp::NumericVector monotonicConstraints,
+    Rcpp::NumericVector groupMemberships,
     bool monotoneAvg
 ){
 
@@ -107,6 +108,12 @@ SEXP rcpp_cppDataFrameInterface(
         )
     );
 
+    std::unique_ptr< std::vector<size_t> > groupMembershipsRcpp (
+        new std::vector<size_t>(
+            Rcpp::as< std::vector<size_t> >(groupMemberships)
+        )
+    );
+
 
     DataFrame* trainingData = new DataFrame(
         std::move(featureDataRcpp),
@@ -121,6 +128,7 @@ SEXP rcpp_cppDataFrameInterface(
         std::move(deepFeatureWeightsVariablesRcpp),
         std::move(observationWeightsRcpp),
         std::move(monotonicConstraintsRcpp),
+        std::move(groupMembershipsRcpp),
         (bool) monotoneAvg
     );
 
@@ -169,6 +177,7 @@ SEXP rcpp_cppBuildInterface(
   Rcpp::NumericVector deepFeatureWeightsVariables,
   Rcpp::NumericVector observationWeights,
   Rcpp::NumericVector monotonicConstraints,
+  Rcpp::NumericVector groupMemberships,
   bool monotoneAvg,
   bool hasNas,
   bool linear,
@@ -290,6 +299,12 @@ SEXP rcpp_cppBuildInterface(
           )
       );
 
+      std::unique_ptr< std::vector<size_t> > groupMembershipsRcpp (
+          new std::vector<size_t>(
+              Rcpp::as< std::vector<size_t> >(groupMemberships)
+          )
+      );
+
       DataFrame* trainingData = new DataFrame(
           std::move(featureDataRcpp),
           std::move(outcomeDataRcpp),
@@ -303,6 +318,7 @@ SEXP rcpp_cppBuildInterface(
           std::move(deepFeatureWeightsVariablesRcpp),
           std::move(observationWeightsRcpp),
           std::move(monotoneConstraintsRcpp),
+          std::move(groupMembershipsRcpp),
           (bool) monotoneAvg
       );
 
@@ -452,6 +468,7 @@ Rcpp::List rcpp_cppPredictInterface(
   int seed,
   int nthread,
   bool exact,
+  bool returnWeightMatrix,
   bool use_weights,
   Rcpp::NumericVector tree_weights
 ){
@@ -504,24 +521,6 @@ Rcpp::List rcpp_cppPredictInterface(
                                                        false,
                                                        NULL);
 
-    } else if (aggregation == "weightMatrix") {
-      size_t nrow = featureData[0].size(); // number of features to be predicted
-      size_t ncol = (*testFullForest).getNtrain(); // number of train data
-      weightMatrix.resize(nrow, ncol); // initialize the space for the matrix
-      weightMatrix.zeros(nrow, ncol);  // set it all to 0
-
-      // In this version, we pass NULL for terminalNodes, and the created weight
-      // matrix for weightMatrix. This speeds stuff up considerably if we want
-      // to run just weightMatrix without terminal nodes (especially on large datasets)
-      testForestPrediction = (*testFullForest).predict(&featureData,
-                                                       &weightMatrix,
-                                                       NULL,
-                                                       NULL,
-                                                       seed,
-                                                       threads_to_use,
-                                                       exact,
-                                                       false,
-                                                       NULL);
     } else if (aggregation == "terminalNodes") {
       // In this case, we return both the terminal nodes, and the weightMatrix
       size_t nrow = featureData[0].size(); // number of features to be predicted
@@ -550,6 +549,24 @@ Rcpp::List rcpp_cppPredictInterface(
                                                        exact,
                                                        false,
                                                        NULL);
+    } else if (returnWeightMatrix) {
+      size_t nrow = featureData[0].size(); // number of features to be predicted
+      size_t ncol = (*testFullForest).getNtrain(); // number of train data
+      weightMatrix.resize(nrow, ncol); // initialize the space for the matrix
+      weightMatrix.zeros(nrow, ncol);  // set it all to 0
+
+      // In this version, we pass NULL for terminalNodes, and the created weight
+      // matrix for weightMatrix. This speeds stuff up considerably if we want
+      // to run just weightMatrix without terminal nodes (especially on large datasets)
+      testForestPrediction = (*testFullForest).predict(&featureData,
+                              &weightMatrix,
+                              NULL,
+                              NULL,
+                              seed,
+                              threads_to_use,
+                              exact,
+                              false,
+                              NULL);
     } else {
       testForestPrediction = (*testFullForest).predict(&featureData,
                                                        NULL,
@@ -670,11 +687,12 @@ double rcpp_OBBPredictInterface(
 }
 
 // [[Rcpp::export]]
-Rcpp::NumericVector rcpp_OBBPredictionsInterface(
+Rcpp::List rcpp_OBBPredictionsInterface(
     SEXP forest,
     Rcpp::List x,
     bool existing_df,
-    bool doubleOOB
+    bool doubleOOB,
+    bool returnWeightMatrix
 ){
   // Then we predict with the feature.new data
   if (existing_df) {
@@ -683,10 +701,32 @@ Rcpp::NumericVector rcpp_OBBPredictionsInterface(
 
     try {
       Rcpp::XPtr< forestry > testFullForest(forest) ;
-      std::vector<double> OOBpreds = (*testFullForest).predictOOB(&featureData,
-                                                                  doubleOOB);
-      Rcpp::NumericVector wrapped_preds = Rcpp::wrap(OOBpreds);
-      return wrapped_preds;
+
+      arma::Mat<double> weightMatrix;
+
+      if (returnWeightMatrix) {
+        size_t nrow = featureData[0].size(); // number of features to be predicted
+        size_t ncol = (*testFullForest).getNtrain(); // number of train data
+        weightMatrix.resize(nrow, ncol); // initialize the space for the matrix
+        weightMatrix.zeros(nrow, ncol);// set it all to 0
+
+        std::vector<double> OOBpreds = (*testFullForest).predictOOB(&featureData,
+                                        &weightMatrix,
+                                        doubleOOB);
+        Rcpp::NumericVector wrapped_preds = Rcpp::wrap(OOBpreds);
+
+        return Rcpp::List::create(Rcpp::Named("predictions") = wrapped_preds,
+                                  Rcpp::Named("weightMatrix") = weightMatrix);
+      } else {
+        // If we don't need weightMatrix, don't return it
+        std::vector<double> OOBpreds = (*testFullForest).predictOOB(&featureData,
+                                        NULL,
+                                        doubleOOB);
+        Rcpp::NumericVector wrapped_preds = Rcpp::wrap(OOBpreds);
+
+        return Rcpp::List::create(Rcpp::Named("predictions") = wrapped_preds);
+      }
+
     } catch(std::runtime_error const& err) {
       forward_exception_to_r(err);
     } catch(...) {
@@ -699,7 +739,7 @@ Rcpp::NumericVector rcpp_OBBPredictionsInterface(
       Rcpp::XPtr< forestry > testFullForest(forest) ;
       std::vector<double> OOBpreds = (*testFullForest).getOOBpreds(doubleOOB);
       Rcpp::NumericVector wrapped_preds = Rcpp::wrap(OOBpreds);
-      return wrapped_preds;
+      return Rcpp::List::create(Rcpp::Named("predictions") = wrapped_preds);
     } catch(std::runtime_error const& err) {
       forward_exception_to_r(err);
     } catch(...) {
@@ -707,7 +747,7 @@ Rcpp::NumericVector rcpp_OBBPredictionsInterface(
     }
   }
 
-  return Rcpp::NumericVector::get_na() ;
+  return Rcpp::List::create(NA_REAL);
 }
 
 // [[Rcpp::export]]
@@ -1038,6 +1078,7 @@ Rcpp::List rcpp_reconstructree(
   Rcpp::NumericVector deepFeatureWeightsVariables,
   Rcpp::NumericVector observationWeights,
   Rcpp::NumericVector monotonicConstraints,
+  Rcpp::NumericVector groupMemberships,
   bool monotoneAvg,
   bool hasNas,
   bool linear,
@@ -1176,6 +1217,11 @@ Rcpp::List rcpp_reconstructree(
           Rcpp::as< std::vector<int> >(monotonicConstraints)
       )
   );
+  std::unique_ptr< std::vector<size_t> > groupMembershipsRcpp (
+      new std::vector<size_t>(
+          Rcpp::as< std::vector<size_t> >(groupMemberships)
+      )
+  );
 
   DataFrame* trainingData = new DataFrame(
     std::move(featureDataRcpp),
@@ -1190,6 +1236,7 @@ Rcpp::List rcpp_reconstructree(
     std::move(deepFeatureWeightsVariablesRcpp),
     std::move(observationWeightsRcpp),
     std::move(monotonicConstraintsRcpp),
+    std::move(groupMembershipsRcpp),
     (bool) monotoneAvg
   );
 
@@ -1279,6 +1326,7 @@ Rcpp::List rcpp_reconstruct_forests(
     Rcpp::NumericVector deepFeatureWeightsVariables,
     Rcpp::NumericVector observationWeights,
     Rcpp::NumericVector monotonicConstraints,
+    Rcpp::NumericVector groupMemberships,
     Rcpp::NumericVector gammas,
     bool monotoneAvg,
     bool linear,
@@ -1463,6 +1511,12 @@ Rcpp::List rcpp_reconstruct_forests(
             Rcpp::as< std::vector<int> >(monotonicConstraints)
         )
     );
+    std::unique_ptr< std::vector<size_t> > groupMembershipsRcpp (
+        new std::vector<size_t>(
+            Rcpp::as< std::vector<size_t> >(groupMemberships)
+        )
+    );
+
 
     DataFrame* trainingData = new DataFrame(
       std::move(featureDataRcpp),
@@ -1477,6 +1531,7 @@ Rcpp::List rcpp_reconstruct_forests(
       std::move(deepFeatureWeightsVariablesRcpp),
       std::move(observationWeightsRcpp),
       std::move(monotonicConstraintsRcpp),
+      std::move(groupMembershipsRcpp),
       (bool) monotoneAvg
     );
 
@@ -1599,6 +1654,11 @@ Rcpp::List rcpp_reconstruct_forests(
           Rcpp::as< std::vector<int> >(monotonicConstraints)
       )
   );
+  std::unique_ptr< std::vector<size_t> > groupMembershipsRcpp (
+      new std::vector<size_t>(
+          Rcpp::as< std::vector<size_t> >(groupMemberships)
+      )
+  );
 
   DataFrame* trainingData = new DataFrame(
     std::move(featureDataRcpp),
@@ -1613,6 +1673,7 @@ Rcpp::List rcpp_reconstruct_forests(
     std::move(deepFeatureWeightsVariablesRcpp),
     std::move(observationWeightsRcpp),
     std::move(monotonicConstraintsRcpp),
+    std::move(groupMembershipsRcpp),
     (bool) monotoneAvg
   );
 

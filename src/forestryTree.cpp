@@ -229,7 +229,8 @@ void forestryTree::predict(
     arma::Mat<double>* weightMatrix,
     bool linear,
     unsigned int seed,
-    size_t nodesizeStrictAvg
+    size_t nodesizeStrictAvg,
+    std::vector<size_t>* OOBIndex
 ){
   // If we are estimating the average in each leaf:
   struct rangeGenerator {
@@ -251,7 +252,8 @@ void forestryTree::predict(
                        linear,
                        getOverfitPenalty(),
                        seed,
-                       nodesizeStrictAvg);
+                       nodesizeStrictAvg,
+                       OOBIndex);
   //Rcpp::Rcout << "Seed is" << seed << ".\n";
 }
 
@@ -1232,6 +1234,49 @@ void forestryTree::getOOBhonestIndex(
   }
 }
 
+void forestryTree::getOOGIndex(
+    std::vector<size_t> &outputOOBIndex,
+    std::vector<size_t> groupMemberships,
+    size_t nRows
+) {
+  // For a given tree, we cycle through all averaging indices and get their
+  // group memberships. Then we take the set of observations which are in groups
+  // which haven't been seen by the current tree, and output this to outputOOBIndex
+  std::sort(
+    getAveragingIndex()->begin(),
+    getAveragingIndex()->end()
+  );
+
+  struct IncGenerator {
+    size_t current_;
+    IncGenerator(size_t start): current_(start) {}
+    size_t operator()() { return current_++; }
+  };
+  std::vector<size_t> allIndex(nRows);
+  IncGenerator g(0);
+  std::generate(allIndex.begin(), allIndex.end(), g);
+
+  // Add all in sample groups to a set
+  std::set<size_t> in_sample_groups;
+  for (std::vector<size_t>::iterator iter = getAveragingIndex()->begin();
+       iter != getAveragingIndex()->end();
+       iter++) {
+    in_sample_groups.insert(groupMemberships[*iter]);
+  }
+
+  for (
+      std::vector<size_t>::iterator it_ = allIndex.begin();
+      it_ != allIndex.end();
+      ++it_
+  ) {
+    // If the group the current observation is in isn't included in the tree,
+    // we ad that observation to the Out of Group index set
+    if (in_sample_groups.find(groupMemberships[*it_]) == in_sample_groups.end()) {
+      outputOOBIndex.push_back(*it_);
+    }
+  }
+}
+
 void forestryTree::getOOBPrediction(
     std::vector<double> &outputOOBPrediction,
     std::vector<size_t> &outputOOBCount,
@@ -1239,7 +1284,8 @@ void forestryTree::getOOBPrediction(
     bool OOBhonest,
     bool doubleOOB,
     size_t nodesizeStrictAvg,
-    std::vector< std::vector<double> >* xNew
+    std::vector< std::vector<double> >* xNew,
+    arma::Mat<double>* weightMatrix
 ){
 
   std::vector<size_t> OOBIndex;
@@ -1247,18 +1293,24 @@ void forestryTree::getOOBPrediction(
   // OOB with and without using the OOB set as the averaging set requires
   // different sets of trees to be used (we want the set of trees)
   // without the averaging set
-  if (OOBhonest) {
-    if (doubleOOB) {
-      // Get setDiff(1:nrow(x), union(splittingIndices, averagingIndices))
-      getDoubleOOBIndex(OOBIndex, trainingData->getNumRows());
-    } else {
-      // Get setDiff(1:nrow(x), averagingIndices)
-      getOOBhonestIndex(OOBIndex, trainingData->getNumRows());
-    }
+  if (trainingData->getGroups()->at(0) != 0) {
+    std::vector<size_t> group_membership_vector = *(trainingData->getGroups());
+    getOOGIndex(OOBIndex, group_membership_vector, trainingData->getNumRows());
   } else {
-    // Standard OOB indices in the non honest case
-    getOOBindex(OOBIndex, trainingData->getNumRows());
+    if (OOBhonest) {
+      if (doubleOOB) {
+        // Get setDiff(1:nrow(x), union(splittingIndices, averagingIndices))
+        getDoubleOOBIndex(OOBIndex, trainingData->getNumRows());
+      } else {
+        // Get setDiff(1:nrow(x), averagingIndices)
+        getOOBhonestIndex(OOBIndex, trainingData->getNumRows());
+      }
+    } else {
+      // Standard OOB indices in the non honest case
+      getOOBindex(OOBIndex, trainingData->getNumRows());
+    }
   }
+
 
 
   // Xnew has first access being the feature selection and second access being
@@ -1299,16 +1351,32 @@ void forestryTree::getOOBPrediction(
     currentTreeCoefficients,
     &xnew,
     trainingData,
-    NULL,
+    weightMatrix,
     false,
     44,
-    nodesizeStrictAvg
+    nodesizeStrictAvg,
+    &OOBIndex
   );
+
+
+  // arma::Mat<double> curWeightMatrix;
+  // size_t nrow = OOBIndex.size(); // number of features to be predicted
+  // size_t ncol = trainingData->getNumRows(); // number of train data
+  // curWeightMatrix.resize(nrow, ncol); // initialize the space for the matrix
+  // curWeightMatrix.zeros(nrow, ncol);// set it all to 0
+
 
   for (size_t i = 0; i < OOBIndex.size(); i++) {
     // Update the global OOB vector
     outputOOBPrediction[OOBIndex[i]] += currentTreePrediction[i];
     outputOOBCount[OOBIndex[i]] += 1;
+
+    // Check weight matrix before we updte
+    // if (weightMatrix) {
+    //   for (size_t j = 0; j < ncol; j++) {
+    //     (*weightMatrix)(OOBIndex[i], j) += curWeightMatrix(i, j);
+    //   }
+    // }
   }
 }
 
@@ -1342,6 +1410,12 @@ void forestryTree::getShuffledOOBPrediction(
     std::vector<double> currentTreePrediction(1);
     std::vector< std::vector<double> > currentTreeCoefficients(1);
     std::vector<int>* currentTreeTerminalNodes = nullptr;
+    arma::Mat<double> curWeightMatrix;
+    size_t nrow = OOBIndex.size(); // number of features to be predicted
+    size_t ncol = trainingData->getNumRows(); // number of train data
+    curWeightMatrix.resize(nrow, ncol); // initialize the space for the matrix
+    curWeightMatrix.zeros(nrow, ncol);// set it all to 0
+
     std::vector<double> OOBSampleObservation((*trainingData).getNumColumns());
     (*trainingData).getShuffledObservationData(OOBSampleObservation,
                                                OOBSampleIndex,
@@ -1361,7 +1435,7 @@ void forestryTree::getShuffledOOBPrediction(
       currentTreeCoefficients,
       &OOBSampleObservation_,
       trainingData,
-      NULL,
+      &curWeightMatrix,
       false,
       44,
       nodesizeStrictAvg

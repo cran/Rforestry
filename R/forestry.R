@@ -33,6 +33,7 @@ training_data_checker <- function(x,
                                   doubleTree,
                                   linFeats,
                                   monotonicConstraints,
+                                  groups,
                                   featureWeights,
                                   deepFeatureWeights,
                                   observationWeights,
@@ -200,6 +201,12 @@ training_data_checker <- function(x,
     stop("splitratio must in between 0 and 1.")
   }
 
+  if (!is.null(groups)) {
+    if (!is.factor(groups)) {
+      stop("groups must be supplied as a vector of factors")
+    }
+  }
+
   if (OOBhonest && (splitratio != 1)) {
     warning("OOBhonest is set to true, so we will run OOBhonesty rather
             than standard honesty")
@@ -356,7 +363,9 @@ setClass(
     deepFeatureWeightsVariables = "numeric",
     observationWeights = "numeric",
     overfitPenalty = "numeric",
-    doubleTree = "logical"
+    doubleTree = "logical",
+    groupsMapping = "list",
+    groups = "numeric"
   )
 )
 
@@ -400,7 +409,9 @@ setClass(
     observationWeights = "numeric",
     overfitPenalty = "numeric",
     gammas = "numeric",
-    doubleTree = "logical"
+    doubleTree = "logical",
+    groupsMapping = "list",
+    groups = "numeric"
   )
 )
 
@@ -496,6 +507,13 @@ setClass(
 #'   1,0,-1 which 1 indicating an increasing monotonic relationship, -1 indicating
 #'   a decreasing monotonic relationship, and 0 indicating no constraint.
 #'   Constraints supplied for categorical variable will be ignored.
+#' @param groups A vector of factors specifying the group membership of each training ovbservation.
+#'   these groups are used in the aggregation when doing out of bag predictions in
+#'   order to predict with only trees where the entire group was not used for aggregation.
+#'   This allows the user to specify custom subgroups which will be used to create
+#'   predictions which do not use any data from a common group to make predictions for
+#'   any observation in the group. This can be used to create general custom
+#'   resampling schemes, and provide predictions consistent with the Out-of-Group set.
 #' @param monotoneAvg This is a boolean flag that indicates whether or not monotonic
 #'   constraints should be enforced on the averaging set in addition to the splitting set.
 #'   This flag is meaningless unless both honesty and monotonic constraints are in use.
@@ -583,6 +601,7 @@ forestry <- function(x,
                      linear = FALSE,
                      linFeats = 0:(ncol(x)-1),
                      monotonicConstraints = rep(0, ncol(x)),
+                     groups = NULL,
                      monotoneAvg = FALSE,
                      overfitPenalty = 1,
                      doubleTree = FALSE,
@@ -644,6 +663,7 @@ forestry <- function(x,
       doubleTree = doubleTree,
       linFeats = linFeats,
       monotonicConstraints = monotonicConstraints,
+      groups = groups,
       featureWeights = featureWeights,
       deepFeatureWeights = deepFeatureWeights,
       observationWeights = observationWeights,
@@ -665,6 +685,19 @@ forestry <- function(x,
   # Total number of obervations
   nObservations <- length(y)
   numColumns <- ncol(x)
+
+  groupsMapping <- list()
+  if (!is.null(groups)) {
+    groupsMapping <- list("groupValue" = levels(groups),
+                          "groupNumericValue" = 1:length(levels(groups)))
+
+  }
+
+  if (!is.null(groups)) {
+    groupVector <- as.integer(groups)
+  } else {
+    groupVector <- rep(0, nrow(x))
+  }
 
   if (is.null(reuseforestry)) {
     preprocessedData <- preprocess_training(x, y)
@@ -699,6 +732,7 @@ forestry <- function(x,
         deepFeatureWeightsVariables = deepFeatureWeightsVariables,
         observationWeights = observationWeights,
         monotonicConstraints = monotonicConstraints,
+        groupMemberships = groupVector,
         monotoneAvg = monotoneAvg
       )
 
@@ -734,6 +768,7 @@ forestry <- function(x,
         deepFeatureWeightsVariables,
         observationWeights,
         monotonicConstraints,
+        groupVector,
         monotoneAvg,
         hasNas,
         linear,
@@ -789,7 +824,9 @@ forestry <- function(x,
           monotonicConstraints = monotonicConstraints,
           monotoneAvg = monotoneAvg,
           overfitPenalty = overfitPenalty,
-          doubleTree = doubleTree
+          doubleTree = doubleTree,
+          groupsMapping = groupsMapping,
+          groups = groupVector
         )
       )
     },
@@ -848,6 +885,7 @@ forestry <- function(x,
         deepFeatureWeightsVariables = deepFeatureWeightsVariables,
         observationWeights,
         monotonicConstraints,
+        groupVector,
         monotoneAvg,
         hasNas,
         linear,
@@ -891,7 +929,9 @@ forestry <- function(x,
           monotonicConstraints = monotonicConstraints,
           monotoneAvg = monotoneAvg,
           overfitPenalty = overfitPenalty,
-          doubleTree = doubleTree
+          doubleTree = doubleTree,
+          groupsMapping = groupsMapping,
+          groups = groupVector
         )
       )
     }, error = function(err) {
@@ -946,6 +986,7 @@ multilayerForestry <- function(x,
                      linear = FALSE,
                      linFeats = 0:(ncol(x)-1),
                      monotonicConstraints = rep(0, ncol(x)),
+                     groups = NULL,
                      monotoneAvg = FALSE,
                      featureWeights = rep(1, ncol(x)),
                      deepFeatureWeights = featureWeights,
@@ -1011,6 +1052,7 @@ multilayerForestry <- function(x,
       featureWeights = featureWeights,
       deepFeatureWeights = deepFeatureWeights,
       observationWeights = observationWeights,
+      groups = groups,
       linear = linear,
       hasNas = hasNas)
 
@@ -1029,6 +1071,18 @@ multilayerForestry <- function(x,
   # Total number of obervations
   nObservations <- length(y)
   numColumns <- ncol(x)
+
+  groupsMapping <- list()
+  if (!is.null(groups)) {
+    groupsMapping <- list("groupValue" = levels(groups),
+                          "groupNumericValue" = 1:length(levels(groups)))
+
+  }
+  if (!is.null(groups)) {
+    groupVector <- as.integer(groups)
+  } else {
+    groupVector <- rep(0, nrow(x))
+  }
 
   if (is.null(reuseforestry)) {
     preprocessedData <- preprocess_training(x, y)
@@ -1062,6 +1116,7 @@ multilayerForestry <- function(x,
         deepFeatureWeightsVariables = deepFeatureWeightsVariables,
         observationWeights = observationWeights,
         monotonicConstraints = monotonicConstraints,
+        groupMemberships = groupVector,
         monotoneAvg = monotoneAvg
       )
 
@@ -1154,7 +1209,9 @@ multilayerForestry <- function(x,
           linFeats = linFeats,
           overfitPenalty = overfitPenalty,
           doubleTree = doubleTree,
-          gammas = gammas
+          groupsMapping = groupsMapping,
+          gammas = gammas,
+          groups = groupVector
         )
       )
     },
@@ -1249,7 +1306,9 @@ multilayerForestry <- function(x,
           monotoneAvg = monotoneAvg,
           overfitPenalty = overfitPenalty,
           doubleTree = doubleTree,
-          gammas = reuseforestry@gammas
+          groupsMapping = reuseforestry@groupsMapping,
+          gammas = reuseforestry@gammas,
+          groups = groupVector
         )
       )
     }, error = function(err) {
@@ -1270,9 +1329,7 @@ multilayerForestry <- function(x,
 #' @param object A `forestry` object.
 #' @param newdata A data frame of testing predictors.
 #' @param aggregation How the individual tree predictions are aggregated:
-#'   `average` returns the mean of all trees in the forest; `weightMatrix`
-#'   returns a list consisting of "weightMatrix", the adaptive nearest neighbor
-#'   weights used to construct the predictions; `terminalNodes` also returns
+#'   `average` returns the mean of all trees in the forest; `terminalNodes` also returns
 #'   the weightMatrix, as well as "terminalNodes", a matrix where
 #'   the ith entry of the jth column is the index of the leaf node to which the
 #'   ith observation is assigned in the jth tree; and "sparse", a matrix
@@ -1318,6 +1375,10 @@ multilayerForestry <- function(x,
 #'   predict(..., trees = c(1,2,2)) = (predict(..., trees = c(1)) +
 #'                                      2*predict(..., trees = c(2))) / 3.
 #'   note we must have exact = TRUE, and aggregation = "average" to use tree indices.
+#' @param weightMatrix An indicator of whether or not we should also return a
+#'   matrix of the weights given to each training observation when making each
+#'   prediction. When getting the weight matrix, aggregation must be one of
+#'   `average`, `oob`, and `doubleOOB`.
 #' @param ... additional arguments.
 #' @return A vector of predicted responses.
 #' @export
@@ -1328,6 +1389,7 @@ predict.forestry <- function(object,
                              nthread = 0,
                              exact = NULL,
                              trees = NULL,
+                             weightMatrix = FALSE,
                              ...) {
 
   if (is.null(newdata) && !(aggregation == "oob" || aggregation == "doubleOOB")) {
@@ -1396,9 +1458,10 @@ predict.forestry <- function(object,
     if (is.null(newdata)) {
       rcppPrediction <- tryCatch({
         rcpp_OBBPredictionsInterface(object@forest,
-                                     NULL,  # Give null for the dataframe
-                                     FALSE, # Tell predict we don't have an existing dataframe
-                                     FALSE
+                                     object@processed_dta$processed_x,  # If we don't provide a dataframe, provide the forest DF
+                                     TRUE, # Tell predict we don't have an existing dataframe
+                                     FALSE,
+                                     weightMatrix
         )
       }, error = function(err) {
         print(err)
@@ -1409,7 +1472,8 @@ predict.forestry <- function(object,
         rcpp_OBBPredictionsInterface(object@forest,
                                      processed_x,
                                      TRUE, # Give dataframe flag
-                                     FALSE
+                                     FALSE,
+                                     weightMatrix
         )
       }, error = function(err) {
         print(err)
@@ -1420,7 +1484,7 @@ predict.forestry <- function(object,
   } else if (aggregation == "doubleOOB") {
 
     if (!is.null(newdata) && (object@sampsize != nrow(newdata))) {
-      warning(paste(
+      stop(paste(
         "Attempting to do OOB predictions on a dataset which doesn't match the",
         "training data!"
       ))
@@ -1428,7 +1492,7 @@ predict.forestry <- function(object,
     }
 
     if (!object@doubleBootstrap) {
-      warning(paste(
+      stop(paste(
         "Attempting to do double OOB predictions with a forest that was not trained
         with doubleBootstrap = TRUE"
       ))
@@ -1438,9 +1502,10 @@ predict.forestry <- function(object,
     if (is.null(newdata)) {
       rcppPrediction <- tryCatch({
         rcpp_OBBPredictionsInterface(object@forest,
-                                     NULL,  # Give null for the dataframe
-                                     FALSE, # Tell predict we don't have an existing dataframe
-                                     TRUE
+                                     object@processed_dta$processed_x,  # Give null for the dataframe
+                                     TRUE, # Tell predict we don't have an existing dataframe
+                                     TRUE,
+                                     weightMatrix
         )
       }, error = function(err) {
         print(err)
@@ -1451,7 +1516,8 @@ predict.forestry <- function(object,
         rcpp_OBBPredictionsInterface(object@forest,
                                      processed_x,
                                      TRUE, # Give dataframe flag
-                                     TRUE
+                                     TRUE,
+                                     weightMatrix
         )
       }, error = function(err) {
         print(err)
@@ -1467,6 +1533,7 @@ predict.forestry <- function(object,
                                seed = seed,
                                nthread = nthread,
                                exact = exact,
+                               returnWeightMatrix = weightMatrix,
                                use_weights = use_weights,
                                tree_weights = tree_weights)
     }, error = function(err) {
@@ -1487,14 +1554,18 @@ predict.forestry <- function(object,
     colnames(rcppPrediction$coef) <- coef_names
   }
 
-  if (aggregation == "average") {
+  if (aggregation == "average" && weightMatrix) {
+    return(rcppPrediction[c(1,2)])
+  } else if (aggregation == "oob" && weightMatrix) {
+    return(rcppPrediction)
+  } else if (aggregation == "doubleOOB" && weightMatrix) {
+    return(rcppPrediction)
+  } else if (aggregation == "average") {
     return(rcppPrediction$prediction)
   } else if (aggregation == "oob") {
-    return(rcppPrediction)
+    return(rcppPrediction$prediction)
   } else if (aggregation == "doubleOOB") {
-    return(rcppPrediction)
-  } else if (aggregation == "weightMatrix") {
-    return(rcppPrediction)
+    return(rcppPrediction$prediction)
   } else if (aggregation == "coefs") {
     return(rcppPrediction)
   } else if (aggregation == "terminalNodes") {
@@ -1615,7 +1686,11 @@ getOOB <- function(object,
     }
 
     rcppOOB <- tryCatch({
-      return(rcpp_OBBPredictInterface(object@forest))
+      preds <- predict(object, aggregation = "oob")
+      # Only calc mse on non missing predictions
+      mse <- mean((preds[which(!is.nan(preds))] -
+                     object@processed_dta$y[which(!is.nan(preds))])^2)
+      return(mse)
     }, error = function(err) {
       print(err)
       return(NA)
@@ -1737,17 +1812,18 @@ getOOBpreds <- function(object,
                                       object@categoricalFeatureCols,
                                       object@categoricalFeatureMapping)
 
-    existing_df = TRUE
   } else {
-    existing_df = FALSE
-    processed_x = NULL
+    # Else we take the data the forest was trained with
+    processed_x <- object@processed_dta$processed_x
   }
 
   rcppOOBpreds <- tryCatch({
-    return(rcpp_OBBPredictionsInterface(object@forest,
-                                        processed_x,
-                                        existing_df,
-                                        doubleOOB))
+    rcppPrediction <- rcpp_OBBPredictionsInterface(object@forest,
+                                                   processed_x,
+                                                   TRUE,
+                                                   doubleOOB,
+                                                   FALSE)
+    return(rcppPrediction$predictions)
   }, error = function(err) {
     print(err)
     return(NA)
@@ -1769,7 +1845,7 @@ getOOBpreds <- function(object,
 #' @return The variable importance of the forest.
 #' @export
 getVI <- function(object,
-                           noWarning) {
+                  noWarning) {
   forest_checker(object)
     # Keep warning for small sample size
     if (!object@replace &&
@@ -1898,7 +1974,7 @@ getCI <- function(object,
     OOB_preds <- predict(object, aggregation = "oob")
     OOB_res <- object@processed_dta$y - OOB_preds
 
-    preds <- predict(object, newdata = newdata, aggregation = "weightMatrix")
+    preds <- predict(object, newdata = newdata, weightMatrix = TRUE)
     weights <- preds$weightMatrix
 
     CI_local <- data.frame(lower = NA, upper = NA)
@@ -1934,6 +2010,51 @@ getCI <- function(object,
 }
 
 
+# -- Get the observations used for prediction ----------------------------------
+#' predictInfo-forestry
+#' @rdname predictInfo-forestry
+#' @description Get the observations which are used to predict for a set of new
+#'  observations using either all trees (for out of sample observations), or
+#'  tree for which the observation is out of averaging set or out of sample entirely.
+#' @param object A `forestry` object.
+#' @param newdata Data on which we want to do predictions. Must be the same length
+#'  as the training set if we are doing `oob` or `doubleOOB` aggregation.
+#' @param aggregation Specifies which aggregation version is used to predict for the
+#' observation, must be one of `average`,`oob`, and `doubleOOB`.
+#' @return A list with four entries. `weightMatrix` is a matrix specifying the
+#'  weight given to training observatio i when prediction on observation j.
+#'  `avgIndices` gives the indices which are in the averaging set for each new
+#'  observation. `avgWeights` gives the weights corresponding to each averaging
+#'  observation returned in `avgIndices`. `obsInfo` gives the full observation vectors
+#'  which were used to predict for an observation, as well as the weight given
+#'  each observation.
+#' @export
+predictInfo <- function(object,
+                        newdata,
+                        aggregation = "average")
+{
+
+  if (!(aggregation %in% c("oob", "doubleOOB","average"))) {
+    stop("We can only use aggregation as oob or doubleOOB")
+  }
+  p <- predict(object, newdata = newdata,
+               exact=TRUE,aggregation = aggregation,weightMatrix = TRUE)
+
+  # Get the averaging indices used for each observation
+  acive_indices <- apply(p$weightMatrix, MARGIN = 1, function(x){return(which(x != 0))})
+  # Get the relative weight given to each averaging observation outcome
+  weights <- apply(p$weightMatrix, MARGIN = 1, function(x){return(x[which(x != 0)])})
+  # Get the observations which correspond to the averaging indices used to predict each outcome
+  observations <- apply(p$weightMatrix, MARGIN = 1, function(y){return(cbind(newdata[which(y != 0),],
+                                                                             "Weight" = y[which(y != 0)]))})
+  # Want observations by descending weight
+  obs_sorted <- lapply(observations, function(x){return(x[order(x$Weight,decreasing=TRUE),])})
+
+  return(list("weightMatrix" = p$weightMatrix,
+              "avgIndices" = acive_indices,
+              "avgWeights" = weights,
+              "obsInfo" = observations))
+}
 
 # -- Add More Trees ------------------------------------------------------------
 #' addTrees-forestry
@@ -2281,6 +2402,7 @@ relinkCPP_prt <- function(object) {
           deepFeatureWeightsVariables = object@deepFeatureWeightsVariables,
           observationWeights = object@observationWeights,
           monotonicConstraints = object@monotonicConstraints,
+          groupMemberships = as.integer(object@groups),
           monotoneAvg = object@monotoneAvg,
           linear = object@linear,
           overfitPenalty = object@overfitPenalty,
@@ -2329,6 +2451,7 @@ relinkCPP_prt <- function(object) {
           deepFeatureWeightsVariables = object@deepFeatureWeightsVariables,
           observationWeights = object@observationWeights,
           monotonicConstraints = object@monotonicConstraints,
+          groupMemberships = as.integer(object@groups),
           monotoneAvg = object@monotoneAvg,
           gammas = object@gammas,
           linear = object@linear,

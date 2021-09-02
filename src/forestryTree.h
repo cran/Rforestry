@@ -62,7 +62,8 @@ public:
     arma::Mat<double>* weightMatrix = NULL,
     bool linear = false,
     unsigned int seed = 44,
-    size_t nodesizeStrictAvg = 1
+    size_t nodesizeStrictAvg = 1,
+    std::vector<size_t>* OOBIndex = NULL
   );
 
   std::unique_ptr<tree_info> getTreeInfo(
@@ -170,6 +171,12 @@ public:
       size_t nRows
   );
 
+  void getOOGIndex(
+      std::vector<size_t> &outputOOBIndex,
+      std::vector<size_t> groupMemberships,
+      size_t nRows
+  );
+
   void getOOBPrediction(
     std::vector<double> &outputOOBPrediction,
     std::vector<size_t> &outputOOBCount,
@@ -177,7 +184,8 @@ public:
     bool OOBhonest,
     bool doubleOOB,
     size_t nodesizeStrictAvg,
-    std::vector< std::vector<double> >* xNew
+    std::vector< std::vector<double> >* xNew,
+    arma::Mat<double>* weightMatrix
   );
 
   void getShuffledOOBPrediction(

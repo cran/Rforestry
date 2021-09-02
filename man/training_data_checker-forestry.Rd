@@ -25,6 +25,7 @@ training_data_checker(
   doubleTree,
   linFeats,
   monotonicConstraints,
+  groups,
   featureWeights,
   deepFeatureWeights,
   observationWeights,
@@ -109,6 +110,14 @@ features and the outcome. Supplied as a vector of length p with entries in
 1,0,-1 which 1 indicating an increasing monotonic relationship, -1 indicating
 a decreasing monotonic relationship, and 0 indicating no constraint.
 Constraints supplied for categorical variable will be ignored.}
+
+\item{groups}{A vector of factors specifying the group membership of each training ovbservation.
+these groups are used in the aggregation when doing out of bag predictions in
+order to predict with only trees where the entire group was not used for aggregation.
+This allows the user to specify custom subgroups which will be used to create
+predictions which do not use any data from a common group to make predictions for
+any observation in the group. This can be used to create general custom
+resampling schemes, and provide predictions consistent with the Out-of-Group set.}
 
 \item{featureWeights}{weights used when subsampling features for nodes above or at interactionDepth.}
 
