@@ -34,11 +34,13 @@ multilayerForestry(
   linFeats = 0:(ncol(x) - 1),
   monotonicConstraints = rep(0, ncol(x)),
   groups = NULL,
+  minTreesPerGroup = 0,
   monotoneAvg = FALSE,
   featureWeights = rep(1, ncol(x)),
   deepFeatureWeights = featureWeights,
   observationWeights = NULL,
   overfitPenalty = 1,
+  scale = FALSE,
   doubleTree = FALSE,
   reuseforestry = NULL,
   savable = TRUE,
@@ -100,13 +102,21 @@ for the averaging set (This is not a good usage, however, since there will be no
 \item{OOBhonest}{In this version of honesty, the out-of-bag observations for each tree
 are used as the honest (averaging) set. This setting also changes how predictions
 are constructed. When predicting for observations that are out-of-sample
-(using Predict(..., aggregation = "average")), all the trees in the forest
+(using predict(..., aggregation = "average")), all the trees in the forest
 are used to construct predictions. When predicting for an observation that was in-sample (using
 predict(..., aggregation = "oob")), only the trees for which that observation
 was not in the averaging set are used to construct the prediction for that observation.
 aggregation="oob" (out-of-bag) ensures that the outcome value for an observation
 is never used to construct predictions for a given observation even when it is in sample.
-This property does not hold in standard honesty, which relies on an asymptotic subsampling argument.}
+This property does not hold in standard honesty, which relies on an asymptotic
+subsampling argument. By default, when OOBhonest = TRUE, the out-of-bag observations
+for each tree are resamples with replacement to be used for the honest (averaging)
+set. This results in a third set of observations that are left out of both
+the splitting and averaging set, we call these the double out-of-bag (doubleOOB)
+observations. In order to get the predictions of only the trees in which each
+observation fell into this doubleOOB set, one can run predict(... , aggregation = "doubleOOB").
+In order to not do this second bootstrap sample, the doubleBootstrap flag can
+be set to FALSE.}
 
 \item{doubleBootstrap}{The doubleBootstrap flag provides the option to resample
 with replacement from the out-of-bag observations set for each tree to construct
@@ -144,13 +154,25 @@ features and the outcome. Supplied as a vector of length p with entries in
 a decreasing monotonic relationship, and 0 indicating no constraint.
 Constraints supplied for categorical variable will be ignored.}
 
-\item{groups}{A vector of factors specifying the group membership of each training ovbservation.
+\item{groups}{A vector of factors specifying the group membership of each training observation.
 these groups are used in the aggregation when doing out of bag predictions in
 order to predict with only trees where the entire group was not used for aggregation.
 This allows the user to specify custom subgroups which will be used to create
 predictions which do not use any data from a common group to make predictions for
 any observation in the group. This can be used to create general custom
 resampling schemes, and provide predictions consistent with the Out-of-Group set.}
+
+\item{minTreesPerGroup}{The number of trees which we make sure have been created leaving
+out each group. This is 0 by default, so we will not give any special treatment to
+the groups when sampling, however if this is set to a positive integer, we
+modify the bootstrap sampling scheme to ensure that exactly that many trees
+have the group left out. We do this by, for each group, creating minTreesPerGroup
+trees which are built on observations sampled from the set of training observations
+which are not in the current group. This means we create at least # groups * minTreesPerGroup
+trees for the forest. If ntree > # groups * minTreesPerGroup, we create
+max(# groups * minTreesPerGroup,ntree) total trees, in which at least minTreesPerGroup
+are created leaving out each group. For debugging purposes, these group sampling
+trees are stored at the end of the R forest, in blocks based on the left out group.}
 
 \item{monotoneAvg}{This is a boolean flag that indicates whether or not monotonic
 constraints should be enforced on the averaging set in addition to the splitting set.
@@ -167,6 +189,10 @@ This option is not allowed when sampling is done without replacement.}
 
 \item{overfitPenalty}{Value to determine how much to penalize the magnitude
 of coefficients in ridge regression when using linear splits.}
+
+\item{scale}{A parameter which indicates whether or not we want to scale and center
+the covariates and outcome before doing the regression. This can help with
+stability, so by default is TRUE.}
 
 \item{doubleTree}{if the number of tree is doubled as averaging and splitting
 data can be exchanged to create decorrelated trees. (Default = FALSE)}

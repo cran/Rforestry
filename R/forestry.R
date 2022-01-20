@@ -205,6 +205,9 @@ training_data_checker <- function(x,
     if (!is.factor(groups)) {
       stop("groups must be supplied as a vector of factors")
     }
+    if (length(levels(groups)) == 1) {
+      stop("groups must have more than 1 level to be left out from sampling")
+    }
   }
 
   if (OOBhonest && (splitratio != 1)) {
@@ -257,6 +260,7 @@ training_data_checker <- function(x,
               "splitratio" = splitratio,
               "OOBhonest" = OOBhonest,
               "nthread" = nthread,
+              "groups" = groups,
               "middleSplit" = middleSplit,
               "doubleTree" = doubleTree,
               "linFeats" = linFeats,
@@ -365,7 +369,11 @@ setClass(
     overfitPenalty = "numeric",
     doubleTree = "logical",
     groupsMapping = "list",
-    groups = "numeric"
+    groups = "numeric",
+    scale = "logical",
+    colMeans = "numeric",
+    colSd = "numeric",
+    minTreesPerGroup = "numeric"
   )
 )
 
@@ -411,7 +419,11 @@ setClass(
     gammas = "numeric",
     doubleTree = "logical",
     groupsMapping = "list",
-    groups = "numeric"
+    groups = "numeric",
+    scale = "logical",
+    colMeans = "numeric",
+    colSd = "numeric",
+    minTreesPerGroup = "numeric"
   )
 )
 
@@ -464,13 +476,21 @@ setClass(
 #' @param OOBhonest In this version of honesty, the out-of-bag observations for each tree
 #'   are used as the honest (averaging) set. This setting also changes how predictions
 #'   are constructed. When predicting for observations that are out-of-sample
-#'   (using Predict(..., aggregation = "average")), all the trees in the forest
+#'   (using predict(..., aggregation = "average")), all the trees in the forest
 #'   are used to construct predictions. When predicting for an observation that was in-sample (using
 #'   predict(..., aggregation = "oob")), only the trees for which that observation
 #'   was not in the averaging set are used to construct the prediction for that observation.
 #'   aggregation="oob" (out-of-bag) ensures that the outcome value for an observation
 #'   is never used to construct predictions for a given observation even when it is in sample.
-#'   This property does not hold in standard honesty, which relies on an asymptotic subsampling argument.
+#'   This property does not hold in standard honesty, which relies on an asymptotic
+#'   subsampling argument. By default, when OOBhonest = TRUE, the out-of-bag observations
+#'   for each tree are resamples with replacement to be used for the honest (averaging)
+#'   set. This results in a third set of observations that are left out of both
+#'   the splitting and averaging set, we call these the double out-of-bag (doubleOOB)
+#'   observations. In order to get the predictions of only the trees in which each
+#'   observation fell into this doubleOOB set, one can run predict(... , aggregation = "doubleOOB").
+#'   In order to not do this second bootstrap sample, the doubleBootstrap flag can
+#'   be set to FALSE.
 #' @param doubleBootstrap The doubleBootstrap flag provides the option to resample
 #'   with replacement from the out-of-bag observations set for each tree to construct
 #'   the averaging set when using OOBhonest. If this is FALSE, the out-of-bag observations
@@ -507,19 +527,33 @@ setClass(
 #'   1,0,-1 which 1 indicating an increasing monotonic relationship, -1 indicating
 #'   a decreasing monotonic relationship, and 0 indicating no constraint.
 #'   Constraints supplied for categorical variable will be ignored.
-#' @param groups A vector of factors specifying the group membership of each training ovbservation.
+#' @param groups A vector of factors specifying the group membership of each training observation.
 #'   these groups are used in the aggregation when doing out of bag predictions in
 #'   order to predict with only trees where the entire group was not used for aggregation.
 #'   This allows the user to specify custom subgroups which will be used to create
 #'   predictions which do not use any data from a common group to make predictions for
 #'   any observation in the group. This can be used to create general custom
 #'   resampling schemes, and provide predictions consistent with the Out-of-Group set.
+#' @param minTreesPerGroup The number of trees which we make sure have been created leaving
+#'   out each group. This is 0 by default, so we will not give any special treatment to
+#'   the groups when sampling, however if this is set to a positive integer, we
+#'   modify the bootstrap sampling scheme to ensure that exactly that many trees
+#'   have the group left out. We do this by, for each group, creating minTreesPerGroup
+#'   trees which are built on observations sampled from the set of training observations
+#'   which are not in the current group. This means we create at least # groups * minTreesPerGroup
+#'   trees for the forest. If ntree > # groups * minTreesPerGroup, we create
+#'   max(# groups * minTreesPerGroup,ntree) total trees, in which at least minTreesPerGroup
+#'   are created leaving out each group. For debugging purposes, these group sampling
+#'   trees are stored at the end of the R forest, in blocks based on the left out group.
 #' @param monotoneAvg This is a boolean flag that indicates whether or not monotonic
 #'   constraints should be enforced on the averaging set in addition to the splitting set.
 #'   This flag is meaningless unless both honesty and monotonic constraints are in use.
 #'   The default is FALSE.
 #' @param overfitPenalty Value to determine how much to penalize the magnitude
 #'   of coefficients in ridge regression when using linear splits.
+#' @param scale A parameter which indicates whether or not we want to scale and center
+#'   the covariates and outcome before doing the regression. This can help with
+#'   stability, so by default is TRUE.
 #' @return A `forestry` object.
 #' @examples
 #' set.seed(292315)
@@ -602,8 +636,10 @@ forestry <- function(x,
                      linFeats = 0:(ncol(x)-1),
                      monotonicConstraints = rep(0, ncol(x)),
                      groups = NULL,
+                     minTreesPerGroup = 0,
                      monotoneAvg = FALSE,
                      overfitPenalty = 1,
+                     scale = TRUE,
                      doubleTree = FALSE,
                      reuseforestry = NULL,
                      savable = TRUE,
@@ -629,6 +665,10 @@ forestry <- function(x,
   x <- as.data.frame(x)
   # Preprocess the data
   hasNas <- any(is.na(x))
+
+  # Create vectors with the column means and SD's for scaling
+  colMeans <- rep(0, ncol(x)+1)
+  colSd <- rep(0, ncol(x)+1)
 
   #Translating interactionVariables to featureWeights syntax
   if(is.null(featureWeights)) {
@@ -695,6 +735,14 @@ forestry <- function(x,
 
   if (!is.null(groups)) {
     groupVector <- as.integer(groups)
+
+    # Print warning if the group number and minTreesPerGroup results in a large
+    # forest
+    if (minTreesPerGroup>0 && length(levels(groups))*minTreesPerGroup > 2000) {
+      warning(paste0("Using ",length(levels(groups))," groups with ",
+                     minTreesPerGroup," trees per group will train ",
+                     length(levels(groups))*minTreesPerGroup," trees in the forest."))
+    }
   } else {
     groupVector <- rep(0, nrow(x))
   }
@@ -716,6 +764,30 @@ forestry <- function(x,
       monotonicConstraints[categoricalFeatureCols_cpp] <- 0
       categoricalFeatureCols_cpp <- categoricalFeatureCols_cpp - 1
     }
+
+    if (scale) {
+      # Get colMeans and ColSd's
+      for (col_idx in 1:ncol(processed_x)) {
+        if ((col_idx-1) %in% categoricalFeatureCols_cpp) {
+          next
+        } else {
+          colMeans[col_idx] <- mean(processed_x[,col_idx], na.rm = TRUE)
+          colSd[col_idx] <- sd(processed_x[,col_idx], na.rm = TRUE)
+        }
+      }
+
+      # Scale columns of X
+      processed_x <- scale_center(processed_x,
+                                  (categoricalFeatureCols_cpp+1),
+                                  colMeans,
+                                  colSd)
+
+      # Center and scale Y
+      colMeans[ncol(processed_x)+1] <- mean(y, na.rm = TRUE)
+      colSd[ncol(processed_x)+1] <- sd(y, na.rm = TRUE)
+      y <- (y-colMeans[ncol(processed_x)+1]) / colSd[ncol(processed_x)+1]
+    }
+
     # Create rcpp object
     # Create a forest object
     forest <- tryCatch({
@@ -769,6 +841,7 @@ forestry <- function(x,
         observationWeights,
         monotonicConstraints,
         groupVector,
+        minTreesPerGroup,
         monotoneAvg,
         hasNas,
         linear,
@@ -797,7 +870,8 @@ forestry <- function(x,
           R_forest = R_forest,
           categoricalFeatureCols = categoricalFeatureCols,
           categoricalFeatureMapping = categoricalFeatureMapping,
-          ntree = ntree * (doubleTree + 1),
+          ntree = ifelse(minTreesPerGroup == 0, ntree * (doubleTree + 1), max(ntree * (doubleTree + 1),
+                                                                              length(levels(groups))*minTreesPerGroup)),
           replace = replace,
           sampsize = sampsize,
           mtry = mtry,
@@ -826,7 +900,11 @@ forestry <- function(x,
           overfitPenalty = overfitPenalty,
           doubleTree = doubleTree,
           groupsMapping = groupsMapping,
-          groups = groupVector
+          groups = groupVector,
+          colMeans = colMeans,
+          colSd = colSd,
+          scale = scale,
+          minTreesPerGroup = minTreesPerGroup
         )
       )
     },
@@ -849,6 +927,29 @@ forestry <- function(x,
 
     categoricalFeatureMapping <-
       reuseforestry@categoricalFeatureMapping
+
+    if (scale) {
+      # Center and scale continous features and outcome
+      for (col_idx in  1:ncol(processed_x)) {
+        if ((col_idx-1) %in% categoricalFeatureCols_cpp) {
+          next
+        } else {
+          colMeans[col_idx] <- mean(processed_x[,col_idx], na.rm = TRUE)
+          colSd[col_idx] <- sd(processed_x[,col_idx], na.rm = TRUE)
+        }
+      }
+
+      # Scale columns of X
+      processed_x <- scale_center(processed_x,
+                                  (categoricalFeatureCols_cpp+1),
+                                  colMeans,
+                                  colSd)
+
+      # Center and scale Y
+      colMeans[ncol(processed_x)+1] <- mean(y, na.rm = TRUE)
+      colSd[ncol(processed_x)+1] <- sd(y, na.rm = TRUE)
+      y <- (y-colMeans[ncol(processed_x)+1]) / colSd[ncol(processed_x)+1]
+    }
 
     # Create rcpp object
     # Create a forest object
@@ -886,6 +987,7 @@ forestry <- function(x,
         observationWeights,
         monotonicConstraints,
         groupVector,
+        minTreesPerGroup,
         monotoneAvg,
         hasNas,
         linear,
@@ -904,7 +1006,8 @@ forestry <- function(x,
           R_forest = reuseforestry@R_forest,
           categoricalFeatureCols = reuseforestry@categoricalFeatureCols,
           categoricalFeatureMapping = categoricalFeatureMapping,
-          ntree = ntree * (doubleTree + 1),
+          ntree = ifelse(minTreesPerGroup == 0, ntree * (doubleTree + 1), max(ntree * (doubleTree + 1),
+                                                                              length(levels(groups))*minTreesPerGroup)),
           replace = replace,
           sampsize = sampsize,
           mtry = mtry,
@@ -931,7 +1034,11 @@ forestry <- function(x,
           overfitPenalty = overfitPenalty,
           doubleTree = doubleTree,
           groupsMapping = groupsMapping,
-          groups = groupVector
+          groups = groupVector,
+          colMeans = colMeans,
+          colSd = colSd,
+          scale = scale,
+          minTreesPerGroup = minTreesPerGroup
         )
       )
     }, error = function(err) {
@@ -987,11 +1094,13 @@ multilayerForestry <- function(x,
                      linFeats = 0:(ncol(x)-1),
                      monotonicConstraints = rep(0, ncol(x)),
                      groups = NULL,
+                     minTreesPerGroup = 0,
                      monotoneAvg = FALSE,
                      featureWeights = rep(1, ncol(x)),
                      deepFeatureWeights = featureWeights,
                      observationWeights = NULL,
                      overfitPenalty = 1,
+                     scale = FALSE,
                      doubleTree = FALSE,
                      reuseforestry = NULL,
                      savable = TRUE,
@@ -1072,6 +1181,10 @@ multilayerForestry <- function(x,
   nObservations <- length(y)
   numColumns <- ncol(x)
 
+  # Create vectors with the column means and SD's for scaling
+  colMeans <- rep(0, ncol(x)+1)
+  colSd <- rep(0, ncol(x)+1)
+
   groupsMapping <- list()
   if (!is.null(groups)) {
     groupsMapping <- list("groupValue" = levels(groups),
@@ -1098,6 +1211,29 @@ multilayerForestry <- function(x,
     } else {
       monotonicConstraints[categoricalFeatureCols_cpp] <- 0
       categoricalFeatureCols_cpp <- categoricalFeatureCols_cpp - 1
+    }
+
+    if (scale) {
+      # Center and scale continous features and outcome
+      for (col_idx in  1:ncol(processed_x)) {
+        if ((col_idx-1) %in% categoricalFeatureCols_cpp) {
+          next
+        } else {
+          colMeans[col_idx] <- mean(processed_x[,col_idx], na.rm = TRUE)
+          colSd[col_idx] <- sd(processed_x[,col_idx], na.rm = TRUE)
+        }
+      }
+
+      # Scale columns of X
+      processed_x <- scale_center(processed_x,
+                                  (categoricalFeatureCols_cpp+1),
+                                  colMeans,
+                                  colSd)
+
+      # Center and scale Y
+      colMeans[ncol(processed_x)+1] <- mean(y, na.rm = TRUE)
+      colSd[ncol(processed_x)+1] <- sd(y, na.rm = TRUE)
+      y <- (y-colMeans[ncol(processed_x)+1]) / colSd[ncol(processed_x)+1]
     }
 
     # Create rcpp object
@@ -1211,7 +1347,11 @@ multilayerForestry <- function(x,
           doubleTree = doubleTree,
           groupsMapping = groupsMapping,
           gammas = gammas,
-          groups = groupVector
+          groups = groupVector,
+          colMeans = colMeans,
+          colSd = colSd,
+          scale = scale,
+          minTreesPerGroup = minTreesPerGroup
         )
       )
     },
@@ -1232,6 +1372,29 @@ multilayerForestry <- function(x,
 
     categoricalFeatureMapping <-
       reuseforestry@categoricalFeatureMapping
+
+    if (scale) {
+      # Center and scale continous features and outcome
+      for (col_idx in  1:ncol(processed_x)) {
+        if ((col_idx-1) %in% categoricalFeatureCols_cpp) {
+          next
+        } else {
+          colMeans[col_idx] <- mean(processed_x[,col_idx], na.rm = TRUE)
+          colSd[col_idx] <- sd(processed_x[,col_idx], na.rm = TRUE)
+        }
+      }
+
+      # Scale columns of X
+      processed_x <- scale_center(processed_x,
+                                  (categoricalFeatureCols_cpp+1),
+                                  colMeans,
+                                  colSd)
+
+      # Center and scale Y
+      colMeans[ncol(processed_x)+1] <- mean(y, na.rm = TRUE)
+      colSd[ncol(processed_x)+1] <- sd(y, na.rm = TRUE)
+      y <- (y-colMeans[ncol(processed_x)+1]) / colSd[ncol(processed_x)+1]
+    }
 
     # Create rcpp object
     # Create a forest object
@@ -1308,7 +1471,11 @@ multilayerForestry <- function(x,
           doubleTree = doubleTree,
           groupsMapping = reuseforestry@groupsMapping,
           gammas = reuseforestry@gammas,
-          groups = groupVector
+          groups = groupVector,
+          colMeans = colMeans,
+          colSd = colSd,
+          scale = scale,
+          minTreesPerGroup = minTreesPerGroup
         )
       )
     }, error = function(err) {
@@ -1411,11 +1578,18 @@ predict.forestry <- function(object,
                                       object@categoricalFeatureCols,
                                       object@categoricalFeatureMapping)
 
+    if (object@scale) {
+      # Cycle through all continuous features and center / scale
+      processed_x <- scale_center(processed_x,
+                                  (unname(object@processed_dta$categoricalFeatureCols_cpp)+1),
+                                  object@colMeans,
+                                  object@colSd)
+    }
   }
 
   # Set exact aggregation method if nobs < 100,000 and average aggregation
   if (is.null(exact)) {
-    if (nrow(newdata) > 1e5 || aggregation != "average") {
+    if (!is.null(newdata) && nrow(newdata) > 1e5) {
       exact = FALSE
     } else {
       exact = TRUE
@@ -1461,7 +1635,8 @@ predict.forestry <- function(object,
                                      object@processed_dta$processed_x,  # If we don't provide a dataframe, provide the forest DF
                                      TRUE, # Tell predict we don't have an existing dataframe
                                      FALSE,
-                                     weightMatrix
+                                     weightMatrix,
+                                     exact
         )
       }, error = function(err) {
         print(err)
@@ -1473,7 +1648,8 @@ predict.forestry <- function(object,
                                      processed_x,
                                      TRUE, # Give dataframe flag
                                      FALSE,
-                                     weightMatrix
+                                     weightMatrix,
+                                     exact
         )
       }, error = function(err) {
         print(err)
@@ -1505,7 +1681,8 @@ predict.forestry <- function(object,
                                      object@processed_dta$processed_x,  # Give null for the dataframe
                                      TRUE, # Tell predict we don't have an existing dataframe
                                      TRUE,
-                                     weightMatrix
+                                     weightMatrix,
+                                     exact
         )
       }, error = function(err) {
         print(err)
@@ -1517,7 +1694,8 @@ predict.forestry <- function(object,
                                      processed_x,
                                      TRUE, # Give dataframe flag
                                      TRUE,
-                                     weightMatrix
+                                     weightMatrix,
+                                     exact
         )
       }, error = function(err) {
         print(err)
@@ -1554,6 +1732,12 @@ predict.forestry <- function(object,
     colnames(rcppPrediction$coef) <- coef_names
   }
 
+  # If we have scaled the observations, we want to rescale the predictions
+  if (object@scale) {
+    rcppPrediction$predictions <- rcppPrediction$predictions*object@colSd[length(object@colSd)] +
+      object@colMeans[length(object@colMeans)]
+  }
+
   if (aggregation == "average" && weightMatrix) {
     return(rcppPrediction[c(1,2)])
   } else if (aggregation == "oob" && weightMatrix) {
@@ -1561,11 +1745,11 @@ predict.forestry <- function(object,
   } else if (aggregation == "doubleOOB" && weightMatrix) {
     return(rcppPrediction)
   } else if (aggregation == "average") {
-    return(rcppPrediction$prediction)
+    return(rcppPrediction$predictions)
   } else if (aggregation == "oob") {
-    return(rcppPrediction$prediction)
+    return(rcppPrediction$predictions)
   } else if (aggregation == "doubleOOB") {
-    return(rcppPrediction$prediction)
+    return(rcppPrediction$predictions)
   } else if (aggregation == "coefs") {
     return(rcppPrediction)
   } else if (aggregation == "terminalNodes") {
@@ -1688,8 +1872,15 @@ getOOB <- function(object,
     rcppOOB <- tryCatch({
       preds <- predict(object, aggregation = "oob")
       # Only calc mse on non missing predictions
+      if (object@scale) {
+        y_true <- object@processed_dta$y[which(!is.nan(preds))]*object@colSd[length(object@colSd)] +
+          object@colMeans[length(object@colMeans)]
+      } else {
+        y_true <- object@processed_dta$y[which(!is.nan(preds))]
+      }
+
       mse <- mean((preds[which(!is.nan(preds))] -
-                     object@processed_dta$y[which(!is.nan(preds))])^2)
+                     y_true)^2)
       return(mse)
     }, error = function(err) {
       print(err)
@@ -1812,6 +2003,13 @@ getOOBpreds <- function(object,
                                       object@categoricalFeatureCols,
                                       object@categoricalFeatureMapping)
 
+    if (object@scale) {
+      # Cycle through all continuous features and center / scale
+      processed_x <- scale_center(processed_x,
+                                  (unname(object@processed_dta$categoricalFeatureCols_cpp)+1),
+                                  object@colMeans,
+                                  object@colSd)
+    }
   } else {
     # Else we take the data the forest was trained with
     processed_x <- object@processed_dta$processed_x
@@ -1822,7 +2020,15 @@ getOOBpreds <- function(object,
                                                    processed_x,
                                                    TRUE,
                                                    doubleOOB,
-                                                   FALSE)
+                                                   FALSE,
+                                                   TRUE)
+
+    # If we have scaled the observations, we want to rescale the predictions
+    if (object@scale) {
+      rcppPrediction$predictions <- rcppPrediction$predictions*object@colSd[length(object@colSd)] +
+        object@colMeans[length(object@colMeans)]
+    }
+
     return(rcppPrediction$predictions)
   }, error = function(err) {
     print(err)
@@ -1957,7 +2163,13 @@ getCI <- function(object,
   } else if (method == "OOB-conformal") {
     # Get double OOB predictions and the residuals
     y_pred <- predict(object, aggregation = "doubleOOB")
-    res <- y_pred - object@processed_dta$y
+    if (object@scale) {
+      res <- y_pred - (object@processed_dta$y*object@colSd[length(object@colSd)] +
+        object@colMeans[length(object@colMeans)])
+    } else {
+      res <- y_pred - object@processed_dta$y
+    }
+
 
     # Get (1-level) / 2 and 1 - (1-level) / 2 quantiles of the residuals
     quantiles <- quantile(res, probs = c((1-level) / 2, 1 - (1-level) / 2))
@@ -1972,7 +2184,13 @@ getCI <- function(object,
     return(predictions)
   } else if (method == "local-conformal") {
     OOB_preds <- predict(object, aggregation = "oob")
-    OOB_res <- object@processed_dta$y - OOB_preds
+    if (object@scale) {
+      OOB_res <- object@processed_dta$y*object@colSd[length(object@colSd)] +
+        object@colMeans[length(object@colMeans)] - OOB_preds
+    } else {
+      OOB_res <- object@processed_dta$y - OOB_preds
+    }
+
 
     preds <- predict(object, newdata = newdata, weightMatrix = TRUE)
     weights <- preds$weightMatrix
@@ -2056,6 +2274,341 @@ predictInfo <- function(object,
               "obsInfo" = observations))
 }
 
+
+# -- Perform bias corrected predictions ----------------------------------------
+#' correctedPredict-forestry
+#' @rdname correctedPredict-forestry
+#' @description Perform predictions given the forest using a bias correction based on
+#'   the out of bag predictions on the training set. By default we use a final linear
+#'   correction based on the leave-one-out hat matrix after doing `nrounds` nonlinear
+#'   corrections.
+#' @param object A `forestry` object.
+#' @param newdata Dataframe on which to predict. If this is left NULL, we
+#'   predict on the in sample data.
+#' @param feats A vector of feature indices which should be included in the bias
+#'   correction. By default only the outcome and predicted outcomes are used.
+#' @param nrounds The number of nonlinear bias correction steps which should be
+#'   taken. By default this is zero, so just a single linear correction is used.
+#' @param linear A flag indicating whether or not we want to do a final linear
+#'   bias correction after doing the nonlinear corrections. Default is TRUE.
+#' @param double A flag indicating if one should use aggregation = "doubleOOB" for
+#'   the initial predictions rather than aggregation = "oob." Default is FALSE.
+#' @param simple flag indicating whether we should do a simple linear adjustment
+#'  or do different adjustments by quantiles. Default is TRUE.
+#' @param verbose flag which displays the bias of each qunatile.
+#' @param use_residuals flag indicating if we should use the residuals to fit the
+#'  bias correction steps. Defualt is FALSE which means that we will use Y
+#'  rather than Y-Y.hat as the regression outcome in the bias correction steps.
+#' @param adaptive flag to indicate whether we use adaptiveForestry or not in the
+#'  regression step. Default is FALSE.
+#' @param monotone flag to indicate whether or not we should use monotonicity
+#'  in the regression of Y on Y hat (when doing forest correction steps).
+#'  If TRUE, will constrain the corrected prediction for Y to be monotone in the
+#'  original prediction of Y. Default is FALSE.
+#' @param num_quants Number of quantiles to use when doing quantile specific bias
+#'  correction. Will only be used if simple = FALSE. Default is 5.
+#' @param params.forestry A list of parameters to pass to the subsequent forestry
+#'  calls. Note that these forests will be trained on features of dimension
+#'  length(feats) + 1 as the correction forests are trained on Y ~ cbind(newdata[,feats], Y.hat).
+#'  so monotonic constraints etc given to this list should be of size length(feats) + 1.
+#'  Defaults to the standard forestry parameters for any parameters that are
+#'  not included in the list.
+#' @param keep_fits A flag that indicates if we should save the intermediate
+#'  forests used for the bias correction. If this is TRUE, we return a list of
+#'  the forestry objects for each iteration in the bias correction.
+#' @return A vector of the bias corrected predictions
+#' @examples
+#'  library(Rforestry)
+#'  set.seed(121235312)
+#'  n <- 50
+#'  p <- 10
+#'  x <- matrix(rnorm(n * p), ncol = p)
+#'  beta <- runif(p,min = 0, max = 1)
+#'  y <- as.matrix(x) %*% beta + rnorm(50)
+#'  x <- data.frame(x)
+#'
+#'  forest <- forestry(x =x,
+#'                     y = y[,1],
+#'                     OOBhonest = TRUE,
+#'                     doubleBootstrap = TRUE)
+#'  p <- predict(forest, x)
+#'
+#'  # Corrected predictions
+#'  pred.bc <- correctedPredict(forest,
+#'                              newdata = x,
+#'                              simple = TRUE,
+#'                              nrounds = 0)
+#'
+#' @export
+correctedPredict <- function(object,
+                             newdata = NULL,
+                             feats = NULL,
+                             nrounds = 0,
+                             linear = TRUE,
+                             double = FALSE,
+                             simple = TRUE,
+                             verbose = FALSE,
+                             use_residuals = FALSE,
+                             adaptive = FALSE,
+                             monotone = FALSE,
+                             num_quants = 5,
+                             params.forestry = list(),
+                             keep_fits = FALSE
+                             )
+
+{
+  # Check allowed settings for the bias correction
+  if (!linear & (nrounds < 1)) {
+    stop("We must do at least one round of bias corrections, with either linear = TRUE or nrounds > 0")
+  }
+
+  if (nrounds < 0 || nrounds %% 1 != 0) {
+    stop("ntree must be a non negative integer.")
+  }
+
+  if (!is.null(feats)) {
+    if (max(feats) > ncol(object@processed_dta$processed_x) ||
+        min(feats) < 1||
+        any(feats %% 1 != 0)) {
+      stop("feats must be a positive integer between 1 and ncol(x)")
+    }
+  }
+
+  # Check the parameters match parameters for forestry or adaptiveForestry
+  if (adaptive) {
+    valid_params <- names(as.list(args(Rforestry::adaptiveForestry)))
+  } else {
+    valid_params <- names(as.list(args(Rforestry::forestry)))
+  }
+  if (any(!(names(params.forestry) %in% valid_params))) {
+    bad_params <- paste(names(params.forestry)[which((!(names(params.forestry) %in% valid_params)))])
+    stop(paste0("Invalid parameter in params.forestry: ",
+                bad_params," "))
+  }
+
+
+  if (double) {
+    agg = "doubleOOB"
+  } else {
+    agg = "oob"
+  }
+
+  # First get out of bag preds
+  oob.preds <- predict(object = object, aggregation = agg)
+
+
+  if (is.null(feats)) {
+    adjust.data <- data.frame(Y = object@processed_dta$y, Y.hat = oob.preds)
+  } else {
+    adjust.data <- data.frame(object@processed_dta$processed_x[,feats],
+                              Y = object@processed_dta$y,
+                              Y.hat = oob.preds)
+    # give adjust data the column names from feats
+    colnames(adjust.data) <- c(paste0("V",feats), "Y","Y.hat")
+  }
+
+
+  # Store the RF fits
+  rf_fits <- list()
+
+  if (nrounds > 0) {
+    for (round_i in 1:nrounds) {
+      # Set right outcome to regress for regression step
+      if(use_residuals) {
+        y_reg <- adjust.data %>% dplyr::pull(Y) - adjust.data %>% dplyr::pull(Y.hat)
+      } else {
+        y_reg <- adjust.data %>% dplyr::pull(Y)
+      }
+
+      if (adaptive) {
+        # Set default params for adaptive forestry
+        params.forestry.i <- params.forestry
+        params.forestry.i$x <- adjust.data %>% dplyr::select(-Y)
+        params.forestry.i$y <- y_reg
+
+        fit.i <- do.call(adaptiveForestry, c(params.forestry.i))
+
+        pred.i <- predict(fit.i, newdata = adjust.data %>% dplyr::select(-Y),
+                          aggregation = agg, weighting = 1)
+      } else if (monotone) {
+        # Set default params for monotonicity in the Y.hat feature
+        params.forestry.i <- params.forestry
+        params.forestry.i$x <- adjust.data %>% dplyr::select(-Y)
+        params.forestry.i$y <- y_reg
+        params.forestry.i$OOBhonest <- TRUE
+        params.forestry.i$monotoneAvg <- TRUE
+        params.forestry.i$monotonicConstraints <- c(rep(0,ncol(adjust.data)-2),1)
+
+
+        fit.i <- do.call(forestry,c(params.forestry.i))
+      } else {
+        # Set default forestry params
+        params.forestry.i <- params.forestry
+        params.forestry.i$x <- adjust.data %>% dplyr::select(-Y)
+        params.forestry.i$y <- y_reg
+        params.forestry.i$OOBhonest <- TRUE
+
+        fit.i <- do.call(forestry, c(params.forestry.i))
+      }
+      pred.i <- predict(fit.i, adjust.data %>% dplyr::select(-Y),
+                          aggregation = agg)
+      # Store the ith fit
+      rf_fits[[round_i]] <- fit.i
+    }
+
+    # If we predicted some residuals, we now have to add the old Y.hat to them
+    # to get the new Y.hat
+    if (use_residuals) {
+      pred.i <- pred.i + (adjust.data %>% dplyr::pull(Y.hat))
+    }
+
+    # Adjust the predicted Y hats
+    adjust.data[, ncol(adjust.data)] <- pred.i
+    names(adjust.data)[ncol(adjust.data)] <- "Y.hat"
+
+    # if we have a new feature, we need to run the correction fits on that as well
+    if (!is.null(newdata)) {
+      # Get initial predictions
+      pred_data <- data.frame(newdata[,feats],
+                              Y.hat = predict(object, newdata))
+
+      # Set column names to follow a format matching the features used
+      if (!is.null(feats)) {
+        colnames(pred_data) <- c(paste0("V",feats), "Y.hat")
+      }
+
+      for (iter in 1:nrounds) {
+        adjusted.pred <- predict(rf_fits[[iter]], newdata = pred_data)
+        pred_data$Y.hat <- adjusted.pred
+      }
+    }
+  }
+
+  if (!is.null(newdata)) {
+    if (nrounds > 0) {
+      preds.initial <- pred_data$Y.hat
+    } else {
+      preds.initial <- predict(object, newdata)
+    }
+  }
+
+  # Given a dataframe with Y and Y.hat at least, fits an OLS and gives the LOO
+  # predictions on the sample
+  loo_pred_helper <- function(df) {
+    adjust.lm <- lm(Y ~ ., data = df)
+
+    # Get LOO coefficients
+    loo.coefs <- lm.influence(adjust.lm)$coefficients
+    for (j in 1:ncol(loo.coefs)){
+      loo.coefs[,j] <- loo.coefs[,j] + unname(adjust.lm$coefficients[j])
+    }
+
+    # Calculate the predictions with the LOO coefficients
+    design.matrix <- data.frame(Int = 1, df[,-(ncol(df)-1)])
+    prod.matrix <- as.matrix(design.matrix) * as.matrix(loo.coefs)
+    preds.adjusted <- rowSums(prod.matrix)
+    return(list("insample_preds"=preds.adjusted, "adjustment_model" = adjust.lm))
+  }
+
+  if (linear) {
+    # Now do linear adjustment
+    if (simple) {
+
+      # Now we either return the adjusted in sample predictions, or the
+      # out of sample predictions scaled according to the adjustment model
+      if (is.null(newdata)) {
+        preds.adjusted <- loo_pred_helper(adjust.data)$insample_preds
+      } else {
+        model <- loo_pred_helper(adjust.data)$adjustment_model
+        data_pred <- data.frame(newdata[,feats],
+                                Y.hat = preds.initial)
+        if (!is.null(feats)) {
+          colnames(data_pred) <- c(paste0("V",feats),"Y.hat")
+        }
+
+        preds.adjusted <- predict(model,
+                                  newdata = data_pred)
+        preds.adjusted <- unname(preds.adjusted)
+      }
+
+    } else {
+      # split Yhat into quantiles
+      q_num <- num_quants+1
+      Y.hat <- adjust.data$Y.hat
+      Y <- adjust.data$Y
+
+      # Get the cuts of the different quantiles
+      cuts <- cut(Y.hat,
+                  quantile(Y.hat, probs=seq(0,1,length.out = q_num) ) ,
+                  include.lowest=TRUE)
+
+      q_indices <- as.numeric(cuts)
+      new_pred <- rep(0, length(Y.hat))
+
+      # Fit a different LM in each quantile
+      fits <- lapply(1:max(q_indices), function(i) {lm(Y ~., adjust.data[which(q_indices == i),])})
+
+      for ( i in 1:max(q_indices) ) {
+        idx <- which(q_indices == i)
+        if ( verbose ) {
+          print(paste0("Quantile: ",i, " ", levels(cuts)[i]))
+          bias <- mean(Y[idx] - Y.hat[idx])
+          print(bias)
+        }
+
+        # Again we have to check if the data was in or out of sample, and do predictions
+        # accordingly
+        new_pred[idx] <- loo_pred_helper(adjust.data[idx,])$insample_preds
+        new_pred <- unlist(new_pred)
+      }
+
+      if (!is.null(newdata)) {
+        # Now we have fit the Q_num different models, we take the models and use
+        # split Yhat into quantiles
+
+        # Training quantiles
+        training_quantiles <- quantile(Y.hat, probs=seq(0,1,length.out = q_num))
+        training_quantiles[1] <- -Inf
+
+        # Get the quantile each testing observation falls into
+        testing.quantiles <- rep(0,length(preds.initial))
+        for (i in 1:length(preds.initial)) {
+          for (q_i in 1:(length(training_quantiles)-1)) {
+            testing.quantiles[i] <- sum(preds.initial[i]>training_quantiles[1:(length(training_quantiles)-1)])
+          }
+        }
+        # Now predict for each index set using the right model
+        preds.adjusted <- rep(0, nrow(newdata))
+        for ( i in 1:(length(training_quantiles)-1)) {
+          pred_df <- data.frame(newdata[which(testing.quantiles == i), feats],
+                                Y.hat = preds.initial[which(testing.quantiles == i)])
+          if (!is.null(feats)) {
+            colnames(pred_df) <- c(paste0("V",feats),"Y.hat")
+          }
+          preds.adjusted[which(testing.quantiles == i)] <- predict(fits[[i]],
+                                                                   newdata = pred_df)
+        }
+      } else {
+        preds.adjusted <- new_pred
+      }
+    }
+
+    if (!keep_fits) {
+      return(preds.adjusted)
+    } else {
+      return(list("predictions" = preds.adjusted, "fits" = rf_fits))
+    }
+  } else {
+    if (!keep_fits) {
+      return(adjust.data[,ncol(adjust.data)])
+    } else {
+      return(list("predictions" = adjust.data[,ncol(adjust.data)], "fits" = rf_fits))
+    }
+  }
+}
+
+
+
 # -- Add More Trees ------------------------------------------------------------
 #' addTrees-forestry
 #' @rdname addTrees-forestry
@@ -2117,7 +2670,8 @@ autoforestry <- function(x,
       y,
       ntree = 1,
       nodesizeSpl = nrow(x),
-      nodesizeAvg = nrow(x)
+      nodesizeAvg = nrow(x),
+      scale=FALSE
     )
 
   # Number of unique executions of Successive Halving (minus one)
@@ -2204,7 +2758,8 @@ autoforestry <- function(x,
           sampsize = sampsize,
           nthread = nthread,
           middleSplit = allConfigs$middleSplit[j],
-          reuseforestry = dummy_tree
+          reuseforestry = dummy_tree,
+          scale=FALSE
         )
       }, error = function(err) {
         val_models[[j]] <- NULL
@@ -2345,7 +2900,7 @@ CppToR_translator <- function(object) {
       print(err)
       return(NA)
     })
-  }
+}
 
 
 # -- relink forest CPP ptr -----------------------------------------------------
@@ -2396,6 +2951,7 @@ relinkCPP_prt <- function(object) {
           middleSplit = object@middleSplit,
           hasNas = object@hasNas,
           maxObs = object@maxObs,
+          minTreesPerGroup = object@minTreesPerGroup,
           featureWeights = object@featureWeights,
           featureWeightsVariables = object@featureWeightsVariables,
           deepFeatureWeights = object@deepFeatureWeights,
@@ -2445,6 +3001,7 @@ relinkCPP_prt <- function(object) {
           verbose = FALSE,
           middleSplit = object@middleSplit,
           maxObs = object@maxObs,
+          minTreesPerGroup = object@minTreesPerGroup,
           featureWeights = object@featureWeights,
           featureWeightsVariables = object@featureWeightsVariables,
           deepFeatureWeights = object@deepFeatureWeights,

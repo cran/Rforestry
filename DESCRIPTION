@@ -2,7 +2,7 @@ Package: Rforestry
 Type: Package
 Title: Random Forests, Linear Trees, and Gradient Boosting for
         Inference and Interpretability
-Version: 0.9.0.57
+Version: 0.9.0.72
 Authors@R: c(
     person("Sören", "Künzel", role = "aut"),
     person("Theo", "Saarinen", role = c("aut","cre"), email = "theo_s@berkeley.edu"),
@@ -22,17 +22,17 @@ Description: Provides fast implementations of Honest Random Forests,
     Theo F. Saarinen, Edward W. Liu, Jasjeet S. Sekhon (2019) <arXiv:1906.06463>.
 License: GPL (>= 3)
 Encoding: UTF-8
-Imports: Rcpp (>= 0.12.9), parallel, methods, visNetwork, glmnet,
-        grDevices, onehot, dplyr
+Imports: Rcpp (>= 0.12.9), parallel, methods, visNetwork, glmnet (>=
+        4.1), grDevices, onehot, dplyr
 LinkingTo: Rcpp, RcppArmadillo, RcppThread
-RoxygenNote: 7.1.1
+RoxygenNote: 7.1.2
 SystemRequirements: C++11
 Suggests: testthat, knitr, rmarkdown, mvtnorm
 Collate: 'R_preprocessing.R' 'RcppExports.R' 'forestry.R'
         'adaptive_forestry.R' 'backwards_compatible.R'
         'compute_rf_lp.R' 'neighborhood_imputation.R' 'plottree.R'
 NeedsCompilation: yes
-Packaged: 2021-09-01 16:28:02 UTC; theo
+Packaged: 2022-01-20 21:56:47 UTC; theosaa
 Author: Sören Künzel [aut],
   Theo Saarinen [aut, cre],
   Simon Walter [aut],
@@ -40,4 +40,4 @@ Author: Sören Künzel [aut],
   Allen Tang [aut],
   Jasjeet Sekhon [aut]
 Repository: CRAN
-Date/Publication: 2021-09-02 12:00:06 UTC
+Date/Publication: 2022-01-20 22:32:57 UTC

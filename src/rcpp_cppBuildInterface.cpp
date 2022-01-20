@@ -178,6 +178,7 @@ SEXP rcpp_cppBuildInterface(
   Rcpp::NumericVector observationWeights,
   Rcpp::NumericVector monotonicConstraints,
   Rcpp::NumericVector groupMemberships,
+  int minTreesPerGroup,
   bool monotoneAvg,
   bool hasNas,
   bool linear,
@@ -213,6 +214,7 @@ SEXP rcpp_cppBuildInterface(
         verbose,
         middleSplit,
         (size_t) maxObs,
+        (size_t) minTreesPerGroup,
         hasNas,
         linear,
         (double) overfitPenalty,
@@ -343,6 +345,7 @@ SEXP rcpp_cppBuildInterface(
         verbose,
         middleSplit,
         (size_t) maxObs,
+        (size_t) minTreesPerGroup,
         hasNas,
         linear,
         (double) overfitPenalty,
@@ -692,7 +695,8 @@ Rcpp::List rcpp_OBBPredictionsInterface(
     Rcpp::List x,
     bool existing_df,
     bool doubleOOB,
-    bool returnWeightMatrix
+    bool returnWeightMatrix,
+    bool exact
 ){
   // Then we predict with the feature.new data
   if (existing_df) {
@@ -712,7 +716,8 @@ Rcpp::List rcpp_OBBPredictionsInterface(
 
         std::vector<double> OOBpreds = (*testFullForest).predictOOB(&featureData,
                                         &weightMatrix,
-                                        doubleOOB);
+                                        doubleOOB,
+                                        exact);
         Rcpp::NumericVector wrapped_preds = Rcpp::wrap(OOBpreds);
 
         return Rcpp::List::create(Rcpp::Named("predictions") = wrapped_preds,
@@ -721,7 +726,8 @@ Rcpp::List rcpp_OBBPredictionsInterface(
         // If we don't need weightMatrix, don't return it
         std::vector<double> OOBpreds = (*testFullForest).predictOOB(&featureData,
                                         NULL,
-                                        doubleOOB);
+                                        doubleOOB,
+                                        exact);
         Rcpp::NumericVector wrapped_preds = Rcpp::wrap(OOBpreds);
 
         return Rcpp::List::create(Rcpp::Named("predictions") = wrapped_preds);
@@ -1072,6 +1078,7 @@ Rcpp::List rcpp_reconstructree(
   bool verbose,
   bool middleSplit,
   int maxObs,
+  int minTreesPerGroup,
   Rcpp::NumericVector featureWeights,
   Rcpp::NumericVector featureWeightsVariables,
   Rcpp::NumericVector deepFeatureWeights,
@@ -1115,9 +1122,19 @@ Rcpp::List rcpp_reconstructree(
       new std::vector<unsigned int>
   );
 
+  // Reserve space for each of the vectors equal to R_forest.size()
+  var_ids->reserve(R_forest.size());
+  split_vals->reserve(R_forest.size());
+  leafAveidxs->reserve(R_forest.size());
+  leafSplidxs->reserve(R_forest.size());
+  averagingSampleIndex->reserve(R_forest.size());
+  splittingSampleIndex->reserve(R_forest.size());
+  naLeftCounts->reserve(R_forest.size());
+  naRightCounts->reserve(R_forest.size());
+  tree_seeds->reserve(R_forest.size());
 
 
-
+  // Now actually populate the vectors
   for(int i=0; i!=R_forest.size(); i++){
     var_ids->push_back(
         Rcpp::as< std::vector<int> > ((Rcpp::as<Rcpp::List>(R_forest[i]))[0])
@@ -1261,6 +1278,7 @@ Rcpp::List rcpp_reconstructree(
     (bool) verbose,
     (bool) middleSplit,
     (int) maxObs,
+    (size_t) minTreesPerGroup,
     (bool) hasNas,
     (bool) linear,
     (double) overfitPenalty,
@@ -1320,6 +1338,7 @@ Rcpp::List rcpp_reconstruct_forests(
     bool verbose,
     bool middleSplit,
     int maxObs,
+    int minTreesPerGroup,
     Rcpp::NumericVector featureWeights,
     Rcpp::NumericVector featureWeightsVariables,
     Rcpp::NumericVector deepFeatureWeights,
@@ -1559,6 +1578,7 @@ Rcpp::List rcpp_reconstruct_forests(
       (bool) verbose,
       (bool) middleSplit,
       (int) maxObs,
+      (size_t) minTreesPerGroup,
       false,
       (bool) linear,
       (double) overfitPenalty,
