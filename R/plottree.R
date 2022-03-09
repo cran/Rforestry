@@ -52,12 +52,16 @@ plot.forestry <- function(x, tree.id = 1, print.meta_dta = FALSE,
 
   forestry_tree <- make_savable(x)
 
+  # Get indicator of whether or not we need to scale
+  scale <- forestry_tree@scale
+
   feat_names <- colnames(forestry_tree@processed_dta$processed_x)
   split_feat <- forestry_tree@R_forest[[tree.id]]$var_id
   split_val <- forestry_tree@R_forest[[tree.id]]$split_val
 
   # get info for the first node ------------------------------------------------
   root_is_leaf <- split_feat[1] < 0
+  first_val <- split_val[1]
   node_info <- data.frame(
     node_id = 1,
     is_leaf = root_is_leaf,
@@ -65,7 +69,7 @@ plot.forestry <- function(x, tree.id = 1, print.meta_dta = FALSE,
     left_child = ifelse(root_is_leaf, NA, 2),
     right_child = NA,
     split_feat = ifelse(root_is_leaf, NA, split_feat[1]),
-    split_val = ifelse(root_is_leaf, NA, split_val[1]),
+    split_val = ifelse(root_is_leaf, NA, first_val),
     num_splitting = ifelse(root_is_leaf, -split_feat[2], 0),
     num_averaging = ifelse(root_is_leaf, -split_feat[1], 0),
     level = 1)
@@ -250,10 +254,10 @@ plot.forestry <- function(x, tree.id = 1, print.meta_dta = FALSE,
       # handle single unique value y_leaf otherwise glmnet fails
       y_leaf_unique <- unique(y_leaf)
       plm_pred_names <- c("interc", colnames(remat))
-      
+
       return_char <- character()
       dev.ratio <- 1
-      
+
       if(length(y_leaf_unique) == 1) {
         return_char = paste0(substr(plm_pred_names[1], 1, beta.char.len), " ", round(y_leaf_unique, 2), "<br>")
         dev.ratio <- 1
@@ -262,21 +266,21 @@ plot.forestry <- function(x, tree.id = 1, print.meta_dta = FALSE,
                               y = y_leaf,
                               lambda = forestry_tree@overfitPenalty * sd(y_leaf)/nrow(remat),
                               alpha	= 0)
-        
+
         plm_pred <- predict(plm, type = "coef")
-        
-        
-        
+
+
+
         for (i in 1:length(plm_pred)) {
           return_char <- paste0(return_char,
                                 substr(plm_pred_names[i], 1, beta.char.len), " ",
                                 round(plm_pred[i], 2), "<br>")
         }
-        
+
         dev.ratio <- plm$dev.ratio
       }
-      
-      
+
+
       nodes$title[leaf_id] <- paste0(nodes$label[leaf_id],
                                      "<br> R2 = ",
                                      dev.ratio,
@@ -291,8 +295,9 @@ plot.forestry <- function(x, tree.id = 1, print.meta_dta = FALSE,
   } else {
     # not ridge forest
     for (leaf_id in node_info$node_id[node_info$is_leaf]) {
+      node_weight = round(mean(dta_y[leaf_idx[[leaf_id]]]),5)
       nodes$label[leaf_id] <- paste0(nodes$label[leaf_id], "\n=======\nm = ",
-                                     round(mean(dta_y[leaf_idx[[leaf_id]]]), 5))
+                                     node_weight)
     }
   }
 

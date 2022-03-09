@@ -50,6 +50,7 @@ forestry::forestry(
   size_t minTreesPerGroup,
   bool hasNas,
   bool linear,
+  bool symmetric,
   double overfitPenalty,
   bool doubleTree
 ){
@@ -78,6 +79,7 @@ forestry::forestry(
   this->_overfitPenalty = overfitPenalty;
   this->_doubleTree = doubleTree;
   this->_minTreesPerGroup = minTreesPerGroup;
+  this->_symmetric = symmetric;
 
   if (splitRatio > 1 || splitRatio < 0) {
     throw std::runtime_error("splitRatio shoule be between 0 and 1.");
@@ -125,6 +127,10 @@ forestry::forestry(
                                                          const std::unique_ptr< forestryTree >& b) {
     return a.get()->getSeed() > b.get()->getSeed();
   });
+
+  //(*curr_forest)[curr_forest->size()-1]->printTree();
+  //(*curr_forest)[0]->printTree();
+
 }
 
 void forestry::addTrees(size_t ntree) {
@@ -400,6 +406,7 @@ void forestry::addTrees(size_t ntree) {
                 getMaxObs(),
                 gethasNas(),
                 getlinear(),
+                getSymmetric(),
                 getOverfitPenalty(),
                 myseed
               )
@@ -425,6 +432,7 @@ void forestry::addTrees(size_t ntree) {
                     getMaxObs(),
                     gethasNas(),
                     getlinear(),
+                    getSymmetric(),
                     getOverfitPenalty(),
                     myseed
                  );
@@ -1142,6 +1150,7 @@ void forestry::fillinTreeInfo(
   return ;
 };
 
+
 void forestry::reconstructTrees(
     std::unique_ptr< std::vector<size_t> > & categoricalFeatureColsRcpp,
     std::unique_ptr< std::vector<unsigned int> > & tree_seeds,
@@ -1156,7 +1165,37 @@ void forestry::reconstructTrees(
     std::unique_ptr< std::vector< std::vector<size_t> >  > &
       splittingSampleIndex){
 
-    for (size_t i=0; i<split_vals->size(); i++) {
+    #if DOPARELLEL
+    size_t nthreadToUse = this->getNthread();
+
+    if (nthreadToUse == 0) {
+      // Use all threads
+      nthreadToUse = std::thread::hardware_concurrency();
+    }
+
+    if (isVerbose()) {
+      RcppThread::Rcout << "Reconstructing in parallel using " << nthreadToUse << " threads"
+                        << std::endl;
+    }
+
+    std::vector<std::thread> allThreads(nthreadToUse);
+    std::mutex threadLock;
+
+    // For each thread, assign a sequence of tree numbers that the thread
+    // is responsible for handling
+    for (size_t t = 0; t < nthreadToUse; t++) {
+      auto dummyThread = std::bind(
+        [&](const int iStart, const int iEnd, const int t_) {
+
+          // loop over al assigned trees, iStart is the starting tree number
+          // and iEnd is the ending tree number
+          for (int i=iStart; i < iEnd; i++) {
+    #else
+              // For non-parallel version, just simply iterate all trees serially
+    for(int i=0; i<(split_vals->size()); i++ ) {
+    #endif
+
+    // for (size_t i=0; i<split_vals->size(); i++) {
       try{
         forestryTree *oneTree = new forestryTree();
 
@@ -1183,13 +1222,40 @@ void forestry::reconstructTrees(
                 (*averagingSampleIndex)[i],
                 (*splittingSampleIndex)[i]);
 
+#if DOPARELLEL
+        std::lock_guard<std::mutex> lock(threadLock);
+#endif
+
         (*getForest()).emplace_back(oneTree);
         _ntree = _ntree + 1;
       } catch (std::runtime_error &err) {
         Rcpp::Rcerr << err.what() << std::endl;
       }
-
   }
+  #if DOPARELLEL
+            },
+            t * split_vals->size() / nthreadToUse,
+            (t + 1) == nthreadToUse ?
+            split_vals->size() :
+              (t + 1) * split_vals->size() / nthreadToUse,
+              t
+        );
+        allThreads[t] = std::thread(dummyThread);
+          }
+
+          std::for_each(
+            allThreads.begin(),
+            allThreads.end(),
+            [](std::thread& x) { x.join(); }
+          );
+#endif
+
+  // Try sorting the forest by seed, this way we should do predict in the same order
+  std::vector< std::unique_ptr< forestryTree > >* curr_forest;
+  curr_forest = this->getForest();
+  std::sort(curr_forest->begin(), curr_forest->end(), [](const std::unique_ptr< forestryTree >& a, const std::unique_ptr< forestryTree >& b) {
+    return a.get()->getSeed() > b.get()->getSeed();
+  });
 
   return;
 }

@@ -38,6 +38,8 @@ training_data_checker <- function(x,
                                   deepFeatureWeights,
                                   observationWeights,
                                   linear,
+                                  symmetric,
+                                  scale,
                                   hasNas
                                   ) {
   x <- as.data.frame(x)
@@ -139,6 +141,22 @@ training_data_checker <- function(x,
     stop("There must be at least one non-zero weight in observationWeights")
   }
 
+  if (any(symmetric!=0) && linear) {
+    stop(paste0("Symmetric forests cannot be combined with linear aggregation",
+                " please set either symmetric = FALSE or linear = FALSE."))
+  }
+
+  if (any(symmetric!=0) && hasNas) {
+    stop(paste0("Symmetric forests cannot be combined with missing values",
+                " please impute the missing features before training a forest with symmetry"))
+  }
+
+  if (any(symmetric!=0) && scale) {
+    scale = FALSE
+    warning(paste0("As symmetry is implementing pseudo outcomes, this causes ",
+                   " problems when the Y values are scaled. Setting scale = FALSE"))
+  }
+
   observationWeights <- observationWeights/sum(observationWeights)
 
   # if the splitratio is 1, then we use adaptive rf and avgSampleSize is the
@@ -199,6 +217,21 @@ training_data_checker <- function(x,
 
   if (splitratio < 0 || splitratio > 1) {
     stop("splitratio must in between 0 and 1.")
+  }
+
+  if (any(symmetric!=0)) {
+    if (length(which(symmetric!=0))>10) {
+      warning("Running symmetric splits in more than 10 features is very slow")
+    }
+    if (any(! (symmetric %in% c(0,1)))) {
+      stop("Entries of the symmetric argument must be zero one")
+    }
+  }
+
+  if (any(symmetric !=0 )) {
+    # for now don't scale when we run symmetric splitting since we use pseudo outcomes
+    # and wnat to retain the scaling of Y
+    scale <- FALSE
   }
 
   if (!is.null(groups)) {
@@ -266,6 +299,7 @@ training_data_checker <- function(x,
               "linFeats" = linFeats,
               "monotonicConstraints" = monotonicConstraints,
               "featureWeights" = featureWeights,
+              "scale" = scale,
               "deepFeatureWeights" = deepFeatureWeights,
               "observationWeights" = observationWeights,
               "hasNas" = hasNas))
@@ -358,6 +392,7 @@ setClass(
     maxObs = "numeric",
     hasNas = "logical",
     linear = "logical",
+    symmetric = "numeric",
     linFeats = "numeric",
     monotonicConstraints = "numeric",
     monotoneAvg = "logical",
@@ -407,6 +442,7 @@ setClass(
     y = "vector",
     maxObs = "numeric",
     linear = "logical",
+    symmetric = "numeric",
     linFeats = "numeric",
     monotonicConstraints = "numeric",
     monotoneAvg = "logical",
@@ -520,6 +556,14 @@ setClass(
 #' @param linear Indicator that enables Ridge penalized splits and linear aggregation
 #'   functions in the leaf nodes. This is recommended for data with linear outcomes.
 #'   For implementation details, see: https://arxiv.org/abs/1906.06463. Default is FALSE.
+#' @param symmetric Used for the experimental feature which imposes strict symmetric
+#'   marginal structure on the predictions of the forest through only selecting
+#'   symmetric splits with symmetric aggregation functions. Should be a vector of size ncol(x) with a single
+#'   1 entry denoting the feature to enforce symmetry on. Defaults to all zeroes.
+#'   For version >= 0.9.0.83, we experimentally allow more than one feature to
+#'   enforce symmetry at a time. This should only be used for a small number of
+#'   features as it has a runtime that is exponential in the number of symmetric
+#'   features (O(N 2^|S|) where S is the set of symmetric features).
 #' @param linFeats A vector containing the indices of which features to split
 #'   linearly on when using linear penalized splits (defaults to use all numerical features).
 #' @param monotonicConstraints Specifies monotonic relationships between the continuous
@@ -633,6 +677,7 @@ forestry <- function(x,
                      middleSplit = FALSE,
                      maxObs = length(y),
                      linear = FALSE,
+                     symmetric = rep(0,ncol(x)),
                      linFeats = 0:(ncol(x)-1),
                      monotonicConstraints = rep(0, ncol(x)),
                      groups = NULL,
@@ -643,7 +688,19 @@ forestry <- function(x,
                      doubleTree = FALSE,
                      reuseforestry = NULL,
                      savable = TRUE,
-                     saveable = TRUE) {
+                     saveable = TRUE
+) {
+  # Make sure that all the parameters exist when passed to forestry
+  tryCatch({
+    check_args <- c(as.list(environment()))
+    rm(check_args)
+  },  error = function(err) {
+    err <- as.character(err)
+    err <- gsub("Error in as.list.environment(environment()): ","", err, fixed = TRUE)
+    stop(paste0("A parameter passed is not assigned: ", err))
+  })
+
+
   if(is.matrix(x) && is.null(colnames(x))) {
     message("x does not have column names. The check that columns are provided in the same order
             when training and predicting will be skipped")
@@ -708,6 +765,8 @@ forestry <- function(x,
       deepFeatureWeights = deepFeatureWeights,
       observationWeights = observationWeights,
       linear = linear,
+      symmetric = symmetric,
+      scale = scale,
       hasNas = hasNas)
 
   for (variable in names(updated_variables)) {
@@ -788,6 +847,12 @@ forestry <- function(x,
       y <- (y-colMeans[ncol(processed_x)+1]) / colSd[ncol(processed_x)+1]
     }
 
+    # Get the symmetric feature if one is set
+    symmetricIndex <- 0
+    if (any(symmetric != 0)) {
+      symmetricIndex <- which(symmetric != 0)
+    }
+
     # Create rcpp object
     # Create a forest object
     forest <- tryCatch({
@@ -805,7 +870,8 @@ forestry <- function(x,
         observationWeights = observationWeights,
         monotonicConstraints = monotonicConstraints,
         groupMemberships = groupVector,
-        monotoneAvg = monotoneAvg
+        monotoneAvg = monotoneAvg,
+        symmetricIndices = symmetricIndex-1
       )
 
       rcppForest <- rcpp_cppBuildInterface(
@@ -841,15 +907,28 @@ forestry <- function(x,
         observationWeights,
         monotonicConstraints,
         groupVector,
+        symmetricIndex-1,
         minTreesPerGroup,
         monotoneAvg,
         hasNas,
         linear,
+        any(symmetric != 0),
         overfitPenalty,
         doubleTree,
         TRUE,
         rcppDataFrame
       )
+
+      # We don't want to save the scaled df, so unceneter and unscale for the R
+      # object
+      if (scale) {
+        processed_x <- unscale_uncenter(processed_x,
+                                        categoricalFeatureCols,
+                                        colMeans,
+                                        colSd)
+        y <-  y * colSd[ncol(processed_x)+1] + colMeans[ncol(processed_x)+1]
+      }
+
       processed_dta <- list(
         "processed_x" = processed_x,
         "y" = y,
@@ -870,8 +949,9 @@ forestry <- function(x,
           R_forest = R_forest,
           categoricalFeatureCols = categoricalFeatureCols,
           categoricalFeatureMapping = categoricalFeatureMapping,
-          ntree = ifelse(minTreesPerGroup == 0, ntree * (doubleTree + 1), max(ntree * (doubleTree + 1),
-                                                                              length(levels(groups))*minTreesPerGroup)),
+          ntree = ifelse(minTreesPerGroup == 0,
+                         ntree * (doubleTree + 1), max(ntree * (doubleTree + 1),
+                         length(levels(groups))*minTreesPerGroup)),
           replace = replace,
           sampsize = sampsize,
           mtry = mtry,
@@ -894,6 +974,7 @@ forestry <- function(x,
           observationWeights = observationWeights,
           hasNas = hasNas,
           linear = linear,
+          symmetric = symmetric,
           linFeats = linFeats,
           monotonicConstraints = monotonicConstraints,
           monotoneAvg = monotoneAvg,
@@ -951,6 +1032,12 @@ forestry <- function(x,
       y <- (y-colMeans[ncol(processed_x)+1]) / colSd[ncol(processed_x)+1]
     }
 
+    # Get the symmetric feature if one is set
+    symmetricIndex <- 0
+    if (any(symmetric != 0)) {
+      symmetricIndex <- which(symmetric != 0)
+    }
+
     # Create rcpp object
     # Create a forest object
     forest <- tryCatch({
@@ -987,10 +1074,12 @@ forestry <- function(x,
         observationWeights,
         monotonicConstraints,
         groupVector,
+        symmetricIndices = symmetricIndex-1,
         minTreesPerGroup,
         monotoneAvg,
         hasNas,
         linear,
+        any(symmetric != 0),
         overfitPenalty,
         doubleTree,
         TRUE,
@@ -1006,8 +1095,9 @@ forestry <- function(x,
           R_forest = reuseforestry@R_forest,
           categoricalFeatureCols = reuseforestry@categoricalFeatureCols,
           categoricalFeatureMapping = categoricalFeatureMapping,
-          ntree = ifelse(minTreesPerGroup == 0, ntree * (doubleTree + 1), max(ntree * (doubleTree + 1),
-                                                                              length(levels(groups))*minTreesPerGroup)),
+          ntree = ifelse(minTreesPerGroup == 0,
+                         ntree * (doubleTree + 1), max(ntree * (doubleTree + 1),
+                         length(levels(groups))*minTreesPerGroup)),
           replace = replace,
           sampsize = sampsize,
           mtry = mtry,
@@ -1028,6 +1118,7 @@ forestry <- function(x,
           observationWeights = observationWeights,
           hasNas = hasNas,
           linear = linear,
+          symmetric = symmetric,
           linFeats = linFeats,
           monotonicConstraints = monotonicConstraints,
           monotoneAvg = monotoneAvg,
@@ -1091,6 +1182,7 @@ multilayerForestry <- function(x,
                      middleSplit = TRUE,
                      maxObs = length(y),
                      linear = FALSE,
+                     symmetric = rep(0,ncol(x)),
                      linFeats = 0:(ncol(x)-1),
                      monotonicConstraints = rep(0, ncol(x)),
                      groups = NULL,
@@ -1104,8 +1196,19 @@ multilayerForestry <- function(x,
                      doubleTree = FALSE,
                      reuseforestry = NULL,
                      savable = TRUE,
-                     saveable = saveable
+                     saveable = TRUE
 ) {
+
+  # Make sure that all the parameters exist when passed to forestry
+  tryCatch({
+    check_args <- c(as.list(environment()))
+    rm(check_args)
+  },  error = function(err) {
+    err <- as.character(err)
+    err <- gsub("Error in as.list.environment(environment()): ","", err, fixed = TRUE)
+    stop(paste0("A parameter passed is not assigned: ", err))
+  })
+
   # Check for named columns
   if(is.matrix(x) && is.null(colnames(x))) {
     message("x does not have column names. The check that columns are provided in the same order
@@ -1163,6 +1266,8 @@ multilayerForestry <- function(x,
       observationWeights = observationWeights,
       groups = groups,
       linear = linear,
+      scale = scale,
+      symmetric = symmetric,
       hasNas = hasNas)
 
   for (variable in names(updated_variables)) {
@@ -1236,6 +1341,12 @@ multilayerForestry <- function(x,
       y <- (y-colMeans[ncol(processed_x)+1]) / colSd[ncol(processed_x)+1]
     }
 
+    # Get the symmetric feature if one is set
+    symmetricIndex <- 0
+    if (any(symmetric != 0)) {
+      symmetricIndex <- which(symmetric != 0)
+    }
+
     # Create rcpp object
     # Create a forest object
     multilayerForestry <- tryCatch({
@@ -1253,7 +1364,8 @@ multilayerForestry <- function(x,
         observationWeights = observationWeights,
         monotonicConstraints = monotonicConstraints,
         groupMemberships = groupVector,
-        monotoneAvg = monotoneAvg
+        monotoneAvg = monotoneAvg,
+        symmetricIndices = symmetric
       )
 
       rcppForest <- rcpp_cppMultilayerBuildInterface(
@@ -1342,6 +1454,7 @@ multilayerForestry <- function(x,
           monotonicConstraints = monotonicConstraints,
           monotoneAvg = monotoneAvg,
           linear = linear,
+          symmetric = symmetric,
           linFeats = linFeats,
           overfitPenalty = overfitPenalty,
           doubleTree = doubleTree,
@@ -1394,6 +1507,12 @@ multilayerForestry <- function(x,
       colMeans[ncol(processed_x)+1] <- mean(y, na.rm = TRUE)
       colSd[ncol(processed_x)+1] <- sd(y, na.rm = TRUE)
       y <- (y-colMeans[ncol(processed_x)+1]) / colSd[ncol(processed_x)+1]
+    }
+
+    # Get the symmetric feature if one is set
+    symmetricIndex <- 0
+    if (any(symmetric != 0)) {
+      symmetricIndex <- which(symmetric != 0)
     }
 
     # Create rcpp object
@@ -1464,6 +1583,7 @@ multilayerForestry <- function(x,
           featureWeights = featureWeights,
           observationWeights = observationWeights,
           linear = linear,
+          symmetric = symmetric,
           linFeats = linFeats,
           monotonicConstraints = monotonicConstraints,
           monotoneAvg = monotoneAvg,
@@ -1630,9 +1750,18 @@ predict.forestry <- function(object,
     }
 
     if (is.null(newdata)) {
+      if (object@scale) {
+        processed_x <- scale_center(object@processed_dta$processed_x,
+                                    (unname(object@processed_dta$categoricalFeatureCols_cpp)+1),
+                                    object@colMeans,
+                                    object@colSd)
+      } else {
+        processed_x <- object@processed_dta$processed_x
+      }
+
       rcppPrediction <- tryCatch({
         rcpp_OBBPredictionsInterface(object@forest,
-                                     object@processed_dta$processed_x,  # If we don't provide a dataframe, provide the forest DF
+                                     processed_x,  # If we don't provide a dataframe, provide the forest DF
                                      TRUE, # Tell predict we don't have an existing dataframe
                                      FALSE,
                                      weightMatrix,
@@ -1676,9 +1805,19 @@ predict.forestry <- function(object,
     }
 
     if (is.null(newdata)) {
+
+      if (object@scale) {
+        processed_x <- scale_center(object@processed_dta$processed_x,
+                                    (unname(object@processed_dta$categoricalFeatureCols_cpp)+1),
+                                    object@colMeans,
+                                    object@colSd)
+      } else {
+        processed_x <- object@processed_dta$processed_x
+      }
+
       rcppPrediction <- tryCatch({
         rcpp_OBBPredictionsInterface(object@forest,
-                                     object@processed_dta$processed_x,  # Give null for the dataframe
+                                     processed_x,  # Give null for the dataframe
                                      TRUE, # Tell predict we don't have an existing dataframe
                                      TRUE,
                                      weightMatrix,
@@ -1872,12 +2011,8 @@ getOOB <- function(object,
     rcppOOB <- tryCatch({
       preds <- predict(object, aggregation = "oob")
       # Only calc mse on non missing predictions
-      if (object@scale) {
-        y_true <- object@processed_dta$y[which(!is.nan(preds))]*object@colSd[length(object@colSd)] +
-          object@colMeans[length(object@colMeans)]
-      } else {
-        y_true <- object@processed_dta$y[which(!is.nan(preds))]
-      }
+      y_true <- object@processed_dta$y[which(!is.nan(preds))]
+
 
       mse <- mean((preds[which(!is.nan(preds))] -
                      y_true)^2)
@@ -2003,16 +2138,18 @@ getOOBpreds <- function(object,
                                       object@categoricalFeatureCols,
                                       object@categoricalFeatureMapping)
 
-    if (object@scale) {
-      # Cycle through all continuous features and center / scale
-      processed_x <- scale_center(processed_x,
-                                  (unname(object@processed_dta$categoricalFeatureCols_cpp)+1),
-                                  object@colMeans,
-                                  object@colSd)
-    }
+
   } else {
     # Else we take the data the forest was trained with
     processed_x <- object@processed_dta$processed_x
+  }
+
+  if (object@scale) {
+    # Cycle through all continuous features and center / scale
+    processed_x <- scale_center(processed_x,
+                                (unname(object@processed_dta$categoricalFeatureCols_cpp)+1),
+                                object@colMeans,
+                                object@colSd)
   }
 
   rcppOOBpreds <- tryCatch({
@@ -2262,11 +2399,17 @@ predictInfo <- function(object,
   acive_indices <- apply(p$weightMatrix, MARGIN = 1, function(x){return(which(x != 0))})
   # Get the relative weight given to each averaging observation outcome
   weights <- apply(p$weightMatrix, MARGIN = 1, function(x){return(x[which(x != 0)])})
+
   # Get the observations which correspond to the averaging indices used to predict each outcome
-  observations <- apply(p$weightMatrix, MARGIN = 1, function(y){return(cbind(newdata[which(y != 0),],
-                                                                             "Weight" = y[which(y != 0)]))})
   # Want observations by descending weight
+  observations <- apply(p$weightMatrix, MARGIN = 1, function(y){df <- data.frame(newdata[which(y != 0),],
+                                                                                 "Weight" = y[which(y != 0)]);
+                                                                colnames(df) <- c(colnames(newdata), "Weight");
+                                                                      return(df)})
+
   obs_sorted <- lapply(observations, function(x){return(x[order(x$Weight,decreasing=TRUE),])})
+
+
 
   return(list("weightMatrix" = p$weightMatrix,
               "avgIndices" = acive_indices,
@@ -2287,6 +2430,10 @@ predictInfo <- function(object,
 #'   predict on the in sample data.
 #' @param feats A vector of feature indices which should be included in the bias
 #'   correction. By default only the outcome and predicted outcomes are used.
+#' @param observations A vector of observation indices from the original data set
+#'   that should be used for the bias correction regression. This can be used for
+#'   treatment effect estimation to carry out separate regressions for the
+#'   treatment and control group.
 #' @param nrounds The number of nonlinear bias correction steps which should be
 #'   taken. By default this is zero, so just a single linear correction is used.
 #' @param linear A flag indicating whether or not we want to do a final linear
@@ -2343,6 +2490,7 @@ predictInfo <- function(object,
 correctedPredict <- function(object,
                              newdata = NULL,
                              feats = NULL,
+                             observations = NULL,
                              nrounds = 0,
                              linear = TRUE,
                              double = FALSE,
@@ -2396,13 +2544,17 @@ correctedPredict <- function(object,
   # First get out of bag preds
   oob.preds <- predict(object = object, aggregation = agg)
 
+  if (is.null(observations)) {
+    observations <- 1:nrow(object@processed_dta$processed_x)
+  }
 
   if (is.null(feats)) {
-    adjust.data <- data.frame(Y = object@processed_dta$y, Y.hat = oob.preds)
+    adjust.data <- data.frame(Y = object@processed_dta$y[observations],
+                              Y.hat = oob.preds[observations])
   } else {
-    adjust.data <- data.frame(object@processed_dta$processed_x[,feats],
-                              Y = object@processed_dta$y,
-                              Y.hat = oob.preds)
+    adjust.data <- data.frame(object@processed_dta$processed_x[observations,feats],
+                              Y = object@processed_dta$y[observations],
+                              Y.hat = oob.preds[observations])
     # give adjust data the column names from feats
     colnames(adjust.data) <- c(paste0("V",feats), "Y","Y.hat")
   }
@@ -2600,9 +2752,17 @@ correctedPredict <- function(object,
     }
   } else {
     if (!keep_fits) {
-      return(adjust.data[,ncol(adjust.data)])
+      if (!is.null(newdata)) {
+        return(pred_data$Y.hat)
+      } else {
+        return(adjust.data[,ncol(adjust.data)])
+      }
     } else {
-      return(list("predictions" = adjust.data[,ncol(adjust.data)], "fits" = rf_fits))
+      if (!is.null(newdata)) {
+        return(list("predictions" = pred_data$Y.hat, "fits" = rf_fits))
+      } else {
+        return(list("predictions" = adjust.data[,ncol(adjust.data)], "fits" = rf_fits))
+      }
     }
   }
 }
@@ -2881,6 +3041,11 @@ loadForestry <- function(filename){
   # First we need to make sure the object is saveable
   name <- base::load(file = filename, envir = environment())
   rf <- get(name)
+
+  # Check if we are loading an old model
+  if (!("symmetric" %in% names(attributes(rf)))) {
+    rf@symmetric <- rep(0,rf@processed_dta$numColumns)
+  }
   rf <- relinkCPP_prt(rf)
   return(rf)
 }
@@ -2923,10 +3088,26 @@ relinkCPP_prt <- function(object) {
           stop("Forest was saved without first calling `forest <- make_savable(forest)`. ",
                "This forest cannot be reconstructed.")
 
+        # If tree has scaling, we need to scale + center the X and Y before
+        # giving to C++
+        if (object@scale) {
+          processed_x <- scale_center(object@processed_dta$processed_x,
+                                      (unname(object@processed_dta$categoricalFeatureCols_cpp)+1),
+                                      object@colMeans,
+                                      object@colSd)
+
+          processed_y <- (object@processed_dta$y-object@colMeans[ncol(processed_x)+1]) /
+            object@colSd[ncol(processed_x)+1]
+        } else {
+          processed_x <- object@processed_dta$processed_x
+          processed_y <- object@processed_dta$y
+        }
+
+
         # In this case we use the tree constructor
         forest_and_df_ptr <- rcpp_reconstructree(
-          x = object@processed_dta$processed_x,
-          y = object@processed_dta$y,
+          x = processed_x,
+          y = processed_y,
           catCols = object@processed_dta$categoricalFeatureCols_cpp,
           linCols = object@processed_dta$linearFeatureCols_cpp,
           numRows = object@processed_dta$nObservations,
@@ -2961,6 +3142,8 @@ relinkCPP_prt <- function(object) {
           groupMemberships = as.integer(object@groups),
           monotoneAvg = object@monotoneAvg,
           linear = object@linear,
+          symmetric = object@symmetric,
+          symmetricIndex = as.integer(ifelse(any(object@symmetric != 0), which(object@symmetric != 0), 0)),
           overfitPenalty = object@overfitPenalty,
           doubleTree = object@doubleTree)
 
@@ -3012,6 +3195,8 @@ relinkCPP_prt <- function(object) {
           monotoneAvg = object@monotoneAvg,
           gammas = object@gammas,
           linear = object@linear,
+          symmetric = object@symmetric,
+          symmetricIndex = as.integer(ifelse(any(object@symmetric != 0), which(object@symmetric != 0), 0)),
           overfitPenalty = object@overfitPenalty,
           doubleTree = object@doubleTree)
 
