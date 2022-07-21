@@ -491,7 +491,9 @@ Rcpp::List rcpp_cppPredictInterface(
   bool exact,
   bool returnWeightMatrix,
   bool use_weights,
-  Rcpp::NumericVector tree_weights
+  bool use_hold_out_idx,
+  Rcpp::NumericVector tree_weights,
+  Rcpp::IntegerVector hold_out_idx
 ){
   try {
 
@@ -507,14 +509,57 @@ Rcpp::List rcpp_cppPredictInterface(
     arma::Mat<int> terminalNodes;
     arma::Mat<double> coefficients;
 
+    if (returnWeightMatrix) {
+      size_t nrow = featureData[0].size(); // number of features to be predicted
+      size_t ncol = (*testFullForest).getNtrain(); // number of train data
+      weightMatrix.resize(nrow, ncol); // initialize the space for the matrix
+      weightMatrix.zeros(nrow, ncol);  // set it all to 0
+    }
+
+
     // Have to keep track of tree_weights
     std::vector<size_t>* testForestTreeWeights;
     std::vector<size_t> weights;
 
-    // If we have weights we want to initialize them.
-    weights = Rcpp::as< std::vector<size_t> >(tree_weights);
+    // If using predict indices, set weights according to them
+    if (use_hold_out_idx) {
+      std::vector<size_t> holdOutIdxCpp = Rcpp::as< std::vector<size_t> >(hold_out_idx);
+
+      for (auto &tree : *(testFullForest->getForest())) {
+        bool discard_tree = false;
+        std::unordered_set<size_t> hold_out_set(holdOutIdxCpp.begin(), holdOutIdxCpp.end());
+        for (const auto &averaging_index : *(tree->getAveragingIndex()) ) {
+          if (hold_out_set.count(averaging_index)) {
+            discard_tree = true;
+            break;
+          }
+        }
+        // if Still haven't found any of them, search splitting set
+        if (!discard_tree) {
+          for (const auto &splitting_index : *(tree->getSplittingIndex()) ) {
+            if (hold_out_set.count(splitting_index)) {
+              discard_tree = true;
+              break;
+            }
+          }
+        }
+        if (discard_tree) {
+          weights.push_back(0);
+        } else {
+          weights.push_back(1);
+        }
+      } // End tree loop
+      // Tell forest to use the weights
+      use_weights = true;
+    } else {
+      // If we have weights we want to initialize them.
+      weights = Rcpp::as< std::vector<size_t> >(tree_weights);
+    }
+
+    // Make ptr to weights
     testForestTreeWeights =
       new std::vector<size_t> (weights);
+
 
 
     size_t threads_to_use;
@@ -570,34 +615,25 @@ Rcpp::List rcpp_cppPredictInterface(
                                                        exact,
                                                        false,
                                                        NULL);
-    } else if (returnWeightMatrix) {
-      size_t nrow = featureData[0].size(); // number of features to be predicted
-      size_t ncol = (*testFullForest).getNtrain(); // number of train data
-      weightMatrix.resize(nrow, ncol); // initialize the space for the matrix
-      weightMatrix.zeros(nrow, ncol);  // set it all to 0
-
-      // In this version, we pass NULL for terminalNodes, and the created weight
-      // matrix for weightMatrix. This speeds stuff up considerably if we want
-      // to run just weightMatrix without terminal nodes (especially on large datasets)
-      testForestPrediction = (*testFullForest).predict(&featureData,
-                              &weightMatrix,
-                              NULL,
-                              NULL,
-                              seed,
-                              threads_to_use,
-                              exact,
-                              false,
-                              NULL);
     } else {
-      testForestPrediction = (*testFullForest).predict(&featureData,
-                                                       NULL,
-                                                       NULL,
-                                                       NULL,
-                                                       seed,
-                                                       threads_to_use,
-                                                       exact,
-                                                       use_weights,
-                                                       use_weights ? testForestTreeWeights : NULL);
+      // If the weights are zero, we just return NaN's
+      if (use_weights &&
+          (std::accumulate(testForestTreeWeights->begin(), testForestTreeWeights->end(), 0) == 0)) {
+
+        testForestPrediction = std::unique_ptr< std::vector<double> >(
+          new std::vector<double>(featureData[0].size(), std::numeric_limits<double>::quiet_NaN())
+        );
+      } else {
+        testForestPrediction = (*testFullForest).predict(&featureData,
+                                returnWeightMatrix ? &weightMatrix : NULL,
+                                NULL,
+                                NULL,
+                                seed,
+                                threads_to_use,
+                                exact,
+                                use_weights,
+                                use_weights ? testForestTreeWeights : NULL);
+      }
     }
 
     std::vector<double>* testForestPrediction_ =
@@ -714,12 +750,19 @@ Rcpp::List rcpp_OBBPredictionsInterface(
     bool existing_df,
     bool doubleOOB,
     bool returnWeightMatrix,
-    bool exact
+    bool exact,
+    bool use_training_idx,
+    Rcpp::IntegerVector training_idx
 ){
   // Then we predict with the feature.new data
   if (existing_df) {
     std::vector< std::vector<double> > featureData =
       Rcpp::as< std::vector< std::vector<double> > >(x);
+
+    std::vector<size_t> training_idx_cpp;
+    if (use_training_idx){
+        training_idx_cpp = Rcpp::as< std::vector<size_t> >(training_idx);
+    }
 
     try {
       Rcpp::XPtr< forestry > testFullForest(forest) ;
@@ -727,7 +770,7 @@ Rcpp::List rcpp_OBBPredictionsInterface(
       arma::Mat<double> weightMatrix;
 
       if (returnWeightMatrix) {
-        size_t nrow = featureData[0].size(); // number of features to be predicted
+        size_t nrow = use_training_idx ? training_idx.size() : (*testFullForest).getNtrain(); // number of features to be predicted
         size_t ncol = (*testFullForest).getNtrain(); // number of train data
         weightMatrix.resize(nrow, ncol); // initialize the space for the matrix
         weightMatrix.zeros(nrow, ncol);// set it all to 0
@@ -735,7 +778,8 @@ Rcpp::List rcpp_OBBPredictionsInterface(
         std::vector<double> OOBpreds = (*testFullForest).predictOOB(&featureData,
                                         &weightMatrix,
                                         doubleOOB,
-                                        exact);
+                                        exact,
+                                        training_idx_cpp);
         Rcpp::NumericVector wrapped_preds = Rcpp::wrap(OOBpreds);
 
         return Rcpp::List::create(Rcpp::Named("predictions") = wrapped_preds,
@@ -745,7 +789,8 @@ Rcpp::List rcpp_OBBPredictionsInterface(
         std::vector<double> OOBpreds = (*testFullForest).predictOOB(&featureData,
                                         NULL,
                                         doubleOOB,
-                                        exact);
+                                        exact,
+                                        training_idx_cpp);
         Rcpp::NumericVector wrapped_preds = Rcpp::wrap(OOBpreds);
 
         return Rcpp::List::create(Rcpp::Named("predictions") = wrapped_preds);

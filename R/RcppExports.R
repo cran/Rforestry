@@ -13,8 +13,8 @@ rcpp_cppMultilayerBuildInterface <- function(x, y, catCols, linCols, numRows, nu
     .Call(`_Rforestry_rcpp_cppMultilayerBuildInterface`, x, y, catCols, linCols, numRows, numColumns, ntree, nrounds, eta, replace, sampsize, mtry, splitratio, OOBhonest, doubleBootstrap, nodesizeSpl, nodesizeAvg, nodesizeStrictSpl, nodesizeStrictAvg, minSplitGain, maxDepth, seed, nthread, verbose, middleSplit, maxObs, featureWeights, featureWeightsVariables, deepFeatureWeights, deepFeatureWeightsVariables, observationWeights, monotonicConstraints, linear, overfitPenalty, doubleTree, existing_dataframe_flag, existing_dataframe)
 }
 
-rcpp_cppPredictInterface <- function(forest, x, aggregation, seed, nthread, exact, returnWeightMatrix, use_weights, tree_weights) {
-    .Call(`_Rforestry_rcpp_cppPredictInterface`, forest, x, aggregation, seed, nthread, exact, returnWeightMatrix, use_weights, tree_weights)
+rcpp_cppPredictInterface <- function(forest, x, aggregation, seed, nthread, exact, returnWeightMatrix, use_weights, use_hold_out_idx, tree_weights, hold_out_idx) {
+    .Call(`_Rforestry_rcpp_cppPredictInterface`, forest, x, aggregation, seed, nthread, exact, returnWeightMatrix, use_weights, use_hold_out_idx, tree_weights, hold_out_idx)
 }
 
 rcpp_cppMultilayerPredictInterface <- function(multilayerForest, x, aggregation, seed, nthread, exact) {
@@ -25,8 +25,8 @@ rcpp_OBBPredictInterface <- function(forest) {
     .Call(`_Rforestry_rcpp_OBBPredictInterface`, forest)
 }
 
-rcpp_OBBPredictionsInterface <- function(forest, x, existing_df, doubleOOB, returnWeightMatrix, exact) {
-    .Call(`_Rforestry_rcpp_OBBPredictionsInterface`, forest, x, existing_df, doubleOOB, returnWeightMatrix, exact)
+rcpp_OBBPredictionsInterface <- function(forest, x, existing_df, doubleOOB, returnWeightMatrix, exact, use_training_idx, training_idx) {
+    .Call(`_Rforestry_rcpp_OBBPredictionsInterface`, forest, x, existing_df, doubleOOB, returnWeightMatrix, exact, use_training_idx, training_idx)
 }
 
 rcpp_VariableImportanceInterface <- function(forest) {

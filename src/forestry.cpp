@@ -139,7 +139,10 @@ void forestry::addTrees(size_t ntree) {
   unsigned int newEndingTreeNumber;
   size_t numToGrow, groupToGrow;
 
-  if (getMinTreesPerGroup() > 0) {
+  // This is called with ntree = 0 only when loading a saved forest.
+  // When minTreesPerGroup takes precedence over ntree, we need to make sure to
+  // train 0 trees when ntree = 0, otherwise this messes up the reconstruction of the forest
+  if ((ntree != 0) && (getMinTreesPerGroup() > 0)) {
     numToGrow =
       (unsigned int) getMinTreesPerGroup() * ((*std::max_element(getTrainingData()->getGroups()->begin(),
                                                                  getTrainingData()->getGroups()->end())));
@@ -496,10 +499,20 @@ std::unique_ptr< std::vector<double> > forestry::predict(
   bool use_weights,
   std::vector<size_t>* tree_weights
 ){
-  std::vector<double> prediction;
+
   size_t numObservations = (*xNew)[0].size();
-  for (size_t j=0; j<numObservations; j++) {
-    prediction.push_back(0);
+  std::vector<double> prediction(numObservations,0.0);
+
+
+  // If using weights, we need to initialize this
+  double total_weights;
+  if (use_weights) {
+    total_weights = 0.0;
+    for (auto weight_i : *tree_weights) {
+      total_weights += (double) weight_i;
+    }
+  } else {
+    total_weights = (double) getNtree();
   }
 
   // If we want to return the ridge coefficients, initialize a matrix
@@ -534,6 +547,10 @@ std::unique_ptr< std::vector<double> > forestry::predict(
   if (isVerbose()) {
     RcppThread::Rcout << "Prediction parallel using " << nthreadToUse << " threads"
               << std::endl;
+    if (use_weights) {
+      RcppThread::Rcout << "Weights given by" << std::endl;
+      print_vector(*tree_weights);
+    }
   }
 
   std::vector<std::thread> allThreads(nthreadToUse);
@@ -560,7 +577,10 @@ std::unique_ptr< std::vector<double> > forestry::predict(
             //If terminal nodes, pass option to tree predict
             forestryTree *currentTree = (*getForest())[i].get();
 
-            if (coefficients) {
+            if (use_weights && (tree_weights->at(i) == (size_t) 0)) {
+              // If weight for the tree is zero, don't predict with that tree
+              std::fill(currentTreePrediction.begin(), currentTreePrediction.end(), 0);
+            } else if (coefficients) {
               for (size_t l=0; l<numObservations; l++) {
                 currentTreeCoefficients[l] = std::vector<double>(coefficients->n_cols);
               }
@@ -613,23 +633,39 @@ std::unique_ptr< std::vector<double> > forestry::predict(
               tree_nodes.push_back(currentTreeTerminalNodes);
               tree_total_nodes.push_back(currentTree->getNodeCount());
             } else {
-              for (size_t j = 0; j < numObservations; j++) {
-                prediction[j] += currentTreePrediction[j];
-              }
+              if (!use_weights) {
+                for (size_t j = 0; j < numObservations; j++) {
+                  prediction[j] += currentTreePrediction[j];
+                }
 
-              if (coefficients) {
-                for (size_t k = 0; k < numObservations; k++) {
-                  for (size_t l = 0; l < coefficients->n_cols; l++) {
-                    (*coefficients)(k,l) += currentTreeCoefficients[k][l];
+                if (coefficients) {
+                  for (size_t k = 0; k < numObservations; k++) {
+                    for (size_t l = 0; l < coefficients->n_cols; l++) {
+                      (*coefficients)(k,l) += currentTreeCoefficients[k][l];
+                    }
                   }
                 }
-              }
 
-              if (terminalNodes) {
-                for (size_t k = 0; k < numObservations; k++) {
-                  (*terminalNodes)(k, i) = currentTreeTerminalNodes[k];
+                if (terminalNodes) {
+                  for (size_t k = 0; k < numObservations; k++) {
+                    (*terminalNodes)(k, i) = currentTreeTerminalNodes[k];
+                  }
+                  (*terminalNodes)(numObservations, i) = (*currentTree).getNodeCount();
                 }
-                (*terminalNodes)(numObservations, i) = (*currentTree).getNodeCount();
+              } else {
+                if (tree_weights->at(i) != (size_t) 0) {
+                  for (size_t j = 0; j < numObservations; j++) {
+                    prediction[j] += ((double) tree_weights->at(i)) * currentTreePrediction[j];
+                  }
+
+                  if (coefficients) {
+                    for (size_t k = 0; k < numObservations; k++) {
+                      for (size_t l = 0; l < coefficients->n_cols; l++) {
+                        (*coefficients)(k,l) += ((double) tree_weights->at(i)) * currentTreeCoefficients[k][l];
+                      }
+                    }
+                  }
+                }
               }
             }
 
@@ -656,8 +692,6 @@ std::unique_ptr< std::vector<double> > forestry::predict(
   #endif
 
   // If exact, we need to aggregate the predictions by tree seed order.
-  double total_weights = 0;
-
   if (exact) {
     std::vector<size_t> indices(tree_seeds.size());
     std::iota(indices.begin(), indices.end(), 0);
@@ -676,7 +710,6 @@ std::unique_ptr< std::vector<double> > forestry::predict(
         size_t cur_index  = *iter;
 
         double cur_weight = use_weights ? (double) (*tree_weights)[weight_index] : (double) 1.0;
-        total_weights += cur_weight;
         weight_index++;
         // Aggregate all predictions for current tree
         for (size_t j = 0; j < numObservations; j++) {
@@ -692,10 +725,6 @@ std::unique_ptr< std::vector<double> > forestry::predict(
     }
   }
 
-  if (!use_weights) {
-    total_weights = (double) getNtree();
-  }
-
   for (size_t j=0; j<numObservations; j++){
     prediction[j] /= total_weights;
   }
@@ -706,13 +735,12 @@ std::unique_ptr< std::vector<double> > forestry::predict(
 
   // If we also update the weight matrix, we now have to divide every entry
   // by the number of trees:
-
   if (weightMatrix) {
     size_t nrow = (*xNew)[0].size();      // number of features to be predicted
     size_t ncol = getNtrain();            // number of train data
     for ( size_t i = 0; i < nrow; i++) {
       for (size_t j = 0; j < ncol; j++) {
-        (*weightMatrix)(i,j) = (*weightMatrix)(i,j) / _ntree;
+        (*weightMatrix)(i,j) = (*weightMatrix)(i,j) / total_weights;
       }
     }
   }
@@ -733,10 +761,13 @@ std::vector<double> forestry::predictOOB(
     std::vector< std::vector<double> >* xNew,
     arma::Mat<double>* weightMatrix,
     bool doubleOOB,
-    bool exact
+    bool exact,
+    std::vector<size_t> &training_idx
 ) {
 
-  size_t numObservations = getTrainingData()->getNumRows();
+  bool use_training_idx = !training_idx.empty();
+  size_t numTrainingRows = getTrainingData()->getNumRows();
+  size_t numObservations = use_training_idx ? training_idx.size() : numTrainingRows;
   std::vector<double> outputOOBPrediction(numObservations);
   std::vector<size_t> outputOOBCount(numObservations);
 
@@ -744,6 +775,8 @@ std::vector<double> forestry::predictOOB(
     outputOOBPrediction[i] = 0;
     outputOOBCount[i] = 0;
   }
+
+  // If we have been giving training indices for the xNew matrix, use these
 
   // Only needed if exact = TRUE, vector for storing each tree's predictions
   std::vector< std::vector<double> > tree_preds;
@@ -789,7 +822,8 @@ std::vector<double> forestry::predictOOB(
                       doubleOOB,
                       getMinNodeSizeToSplitAvg(),
                       xNew,
-                      weightMatrix
+                      weightMatrix,
+                      training_idx
                   );
                   #if DOPARELLEL
                   std::lock_guard<std::mutex> lock(threadLock);
@@ -800,6 +834,8 @@ std::vector<double> forestry::predictOOB(
 
                   if (exact) {
                     tree_preds.push_back(outputOOBPrediction_iteration);
+                    //std::cout << "Tree predictions "<< std::endl;
+                    //print_vector(outputOOBPrediction_iteration);
                     for (size_t j=0; j < numObservations; j++) {
                       outputOOBCount[j] += outputOOBCount_iteration[j];
                     }
@@ -864,7 +900,7 @@ std::vector<double> forestry::predictOOB(
     if (weightMatrix) {
       for (size_t j=0; j<numObservations; j++){
         if (outputOOBCount[j] != 0) {
-          for (size_t i = 0; i < numObservations; i++) {
+          for (size_t i = 0; i < numTrainingRows; i++) {
             (*weightMatrix)(j,i) = (*weightMatrix)(j,i) / outputOOBCount[j];
           }
         }
@@ -880,7 +916,7 @@ std::vector<double> forestry::predictOOB(
         outputOOBPrediction[j] = outputOOBPrediction[j] / outputOOBCount[j];
         //Also divide the weightMatrix
         if (weightMatrix) {
-          for (size_t i = 0; i < numObservations; i++) {
+          for (size_t i = 0; i < numTrainingRows; i++) {
             (*weightMatrix)(j,i) = (*weightMatrix)(j,i) / outputOOBCount[j];
           }
         }
@@ -1014,6 +1050,8 @@ void forestry::calculateOOBError(
   std::vector<double> outputOOBPrediction(numObservations);
   std::vector<size_t> outputOOBCount(numObservations);
 
+  std::vector<size_t> training_idx;
+
   for (size_t i=0; i<numObservations; i++) {
     outputOOBPrediction[i] = 0;
     outputOOBCount[i] = 0;
@@ -1061,7 +1099,8 @@ void forestry::calculateOOBError(
               doubleOOB,
               getMinNodeSizeToSplitAvg(),
               nullptr,
-              NULL
+              NULL,
+              training_idx
             );
 
             #if DOPARELLEL

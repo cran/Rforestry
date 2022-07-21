@@ -700,6 +700,10 @@ forestry <- function(x,
     stop(paste0("A parameter passed is not assigned: ", err))
   })
 
+  # Should not scale if we have only one value of Y
+  if (sd(y) == 0) {
+    scale = FALSE
+  }
 
   if(is.matrix(x) && is.null(colnames(x))) {
     message("x does not have column names. The check that columns are provided in the same order
@@ -798,7 +802,7 @@ forestry <- function(x,
     # Print warning if the group number and minTreesPerGroup results in a large
     # forest
     if (minTreesPerGroup>0 && length(levels(groups))*minTreesPerGroup > 2000) {
-      warning(paste0("Using ",length(levels(groups))," groups with ",
+      print(paste0("Using ",length(levels(groups))," groups with ",
                      minTreesPerGroup," trees per group will train ",
                      length(levels(groups))*minTreesPerGroup," trees in the forest."))
     }
@@ -848,7 +852,7 @@ forestry <- function(x,
     }
 
     # Get the symmetric feature if one is set
-    symmetricIndex <- 0
+    symmetricIndex <- 1
     if (any(symmetric != 0)) {
       symmetricIndex <- which(symmetric != 0)
     }
@@ -1033,7 +1037,7 @@ forestry <- function(x,
     }
 
     # Get the symmetric feature if one is set
-    symmetricIndex <- 0
+    symmetricIndex <- 1
     if (any(symmetric != 0)) {
       symmetricIndex <- which(symmetric != 0)
     }
@@ -1219,6 +1223,11 @@ multilayerForestry <- function(x,
     sampsize <- ceiling(sample.fraction * nrow(x))
   linFeats <- unique(linFeats)
 
+  # Should not scale if we have only one value of Y
+  if (sd(y) == 0) {
+    scale = FALSE
+  }
+
   x <- as.data.frame(x)
   hasNas <- any(is.na(x))
   if (hasNas) {
@@ -1342,7 +1351,7 @@ multilayerForestry <- function(x,
     }
 
     # Get the symmetric feature if one is set
-    symmetricIndex <- 0
+    symmetricIndex <- 1
     if (any(symmetric != 0)) {
       symmetricIndex <- which(symmetric != 0)
     }
@@ -1510,7 +1519,7 @@ multilayerForestry <- function(x,
     }
 
     # Get the symmetric feature if one is set
-    symmetricIndex <- 0
+    symmetricIndex <- 1
     if (any(symmetric != 0)) {
       symmetricIndex <- which(symmetric != 0)
     }
@@ -1643,6 +1652,33 @@ multilayerForestry <- function(x,
 #'   functions have been used. This returns the linear coefficients for each
 #'   linear feature which were used in the leaf node regression of each predicted
 #'   point.
+#' @param holdOutIdx This is an optional argument, containing a vector of indices
+#'   from the training data set that should be not be allowed to influence the
+#'   predictions of the forest. When a vector of indices of training observations are
+#'   given, the predictions will be made only with trees in the forest that
+#'   do not contain any of these indices in either the splitting or averaging sets.
+#'   This cannot be used at the same time as any other aggregation options.
+#'   If `weightMatrix = TRUE`, this will return the
+#'   weightMatrix corresponding to the predictions made with trees respecting
+#'   holdOutIdx. If there are no trees that have held out all of the indices
+#'   in holdOutIdx, then the predictions will return NaN.
+#' @param trainingIdx This is an optional parameter to give the indices of the observations
+#'   in `newdata` from the training data set. This is used when we want to run predict on
+#'   only a subset of observations from the training data set and use `aggregation = "oob"` or
+#'   `aggregation = "doubleOOB"`. For example, at the tree level, a tree make out of
+#'   bag (`aggregation = "oob"`) predictions for the indices in the set
+#'   setdiff(trainingIdx,tree$averagingIndices) and will make double out-of-bag
+#'   predictions for the indices in the set
+#'   setdiff(trainingIdx,union(tree$averagingIndices,tree$splittingIndices).
+#'   Note, this parameter must be set when predict is called with an out-of-bag
+#'   aggregation option on a data set not matching the original training data size.
+#'   The order of indices in `trainingIdx` also needs to match the order of observations
+#'   in newdata. So for an arbitrary index set `trainingIdx` and dataframe `newdata`,
+#'    of the same size as the training set, the predictions from `predict(rf, newdata[trainingIdx,],`
+#'   `aggregation = "oob", trainingIdx = trainingIdx)` should match the
+#'   predictions of to `predict(rf, newdata, aggregation = "oob")[trainingIdx]`.
+#'   This option also works with the `weightMatrix` option and will return the
+#'   (smaller) weightMatrix for the observations in the passed data frame.
 #' @param seed random seed
 #' @param nthread The number of threads with which to run the predictions with.
 #'   This will default to the number of threads with which the forest was trained
@@ -1672,6 +1708,8 @@ multilayerForestry <- function(x,
 predict.forestry <- function(object,
                              newdata = NULL,
                              aggregation = "average",
+                             holdOutIdx = NULL,
+                             trainingIdx = NULL,
                              seed = as.integer(runif(1) * 10000),
                              nthread = 0,
                              exact = NULL,
@@ -1685,6 +1723,51 @@ predict.forestry <- function(object,
 
   if ((!(object@linear)) && (aggregation == "coefs")) {
     stop("Aggregation can only be linear with setting the parameter linear = TRUE.")
+  }
+
+  if (!is.null(holdOutIdx) && !is.null(trees)) {
+    stop("Only one of holdOutIdx and trees must be set at one time")
+  }
+
+  if (!is.null(holdOutIdx) && (aggregation != "average")) {
+    stop("holdOutIdx can only be used when aggregation is average")
+  }
+
+  if (aggregation %in% c("oob", "doubleOOB") && (!is.null(newdata)) && is.null(trainingIdx) && (nrow(newdata) != (object@processed_dta$nObservations))) {
+    stop(paste0("trainingIdx must be set when doing out of bag predictions with a data set ",
+                "not equal in size to the training data set"))
+  }
+
+  # Check that holdOutIdx entries are valid
+  if (!is.null(holdOutIdx)) {
+    # Check that indices are integers within the range of the training set indices
+    if (any(holdOutIdx %% 1 != 0) ||
+        (max(holdOutIdx) > nrow(object@processed_dta$processed_x)) ||
+        (min(holdOutIdx) < 1) ) {
+      stop("holdOutIdx must contain only integers in the range of the training set indices")
+    }
+  }
+
+  # Check that trainingIdx entries are valid
+  if (!is.null(trainingIdx)) {
+    if (nrow(newdata) != length(trainingIdx)) {
+      stop(paste0("The length of trainingIdx must be the same as the number of ",
+                  "observations in the training data"))
+    }
+
+    # Check that indices are integers within the range of the training set indices
+    if (any(trainingIdx %% 1 != 0) ||
+        (max(trainingIdx) > nrow(object@processed_dta$processed_x)) ||
+        (min(trainingIdx) < 1) ) {
+      stop("trainingIdx must contain only integers in the range of the training set indices")
+    }
+
+    # Check that correct aggregation is used
+    if (!(aggregation %in% c("oob", "doubleOOB"))) {
+      warning(paste0("trainingIdx are only used when aggregation is oob or doubleOOB.",
+                     " The current aggregation doesn't match either so trainingIdx will be ignored"))
+      trainingIdx <- NULL
+    }
   }
 
   # Preprocess the data. We only run the data checker if ridge is turned on,
@@ -1737,17 +1820,46 @@ predict.forestry <- function(object,
     use_weights <- FALSE
   }
 
+  if (!is.null(trainingIdx)) {
+    useTrainingIndices <- TRUE
+    trainingIndices <- trainingIdx-1
+  } else {
+    useTrainingIndices <- FALSE
+    trainingIndices <- c(-1)
+  }
+
 
   # If option set to terminalNodes, we need to make matrix of ID's
-  if (aggregation == "oob") {
-
-    if (!is.null(newdata) && (object@processed_dta$nObservations != nrow(newdata))) {
-      warning(paste(
-        "Attempting to do OOB predictions on a dataset which doesn't match the",
-        "training data!"
-      ))
-      return(NA)
+  if (!is.null(holdOutIdx)) {
+    if (is.null(newdata)) {
+      if (object@scale) {
+        processed_x <- scale_center(object@processed_dta$processed_x,
+                                    (unname(object@processed_dta$categoricalFeatureCols_cpp)+1),
+                                    object@colMeans,
+                                    object@colSd)
+      } else {
+        processed_x <- object@processed_dta$processed_x
+      }
     }
+
+    rcppPrediction <- tryCatch({
+      rcpp_cppPredictInterface(object@forest,
+                               processed_x,
+                               aggregation,
+                               seed = seed,
+                               nthread = nthread,
+                               exact = exact,
+                               returnWeightMatrix = weightMatrix,
+                               use_weights = use_weights,
+                               use_hold_out_idx = TRUE,
+                               tree_weights = tree_weights,
+                               hold_out_idx = (holdOutIdx-1)) # Change to 0 indexed for C++
+    }, error = function(err) {
+      print(err)
+      return(NULL)
+    })
+
+  } else if (aggregation == "oob") {
 
     if (is.null(newdata)) {
       if (object@scale) {
@@ -1758,43 +1870,24 @@ predict.forestry <- function(object,
       } else {
         processed_x <- object@processed_dta$processed_x
       }
-
-      rcppPrediction <- tryCatch({
-        rcpp_OBBPredictionsInterface(object@forest,
-                                     processed_x,  # If we don't provide a dataframe, provide the forest DF
-                                     TRUE, # Tell predict we don't have an existing dataframe
-                                     FALSE,
-                                     weightMatrix,
-                                     exact
-        )
-      }, error = function(err) {
-        print(err)
-        return(NULL)
-      })
-    } else {
-      rcppPrediction <- tryCatch({
-        rcpp_OBBPredictionsInterface(object@forest,
-                                     processed_x,
-                                     TRUE, # Give dataframe flag
-                                     FALSE,
-                                     weightMatrix,
-                                     exact
-        )
-      }, error = function(err) {
-        print(err)
-        return(NULL)
-      })
     }
+
+    rcppPrediction <- tryCatch({
+      rcpp_OBBPredictionsInterface(object@forest,
+                                   processed_x,  # If we don't provide a dataframe, provide the forest DF
+                                   TRUE, # Tell predict we don't have an existing dataframe
+                                   FALSE,
+                                   weightMatrix,
+                                   exact,
+                                   useTrainingIndices,
+                                   trainingIndices
+      )
+    }, error = function(err) {
+      print(err)
+      return(NULL)
+    })
 
   } else if (aggregation == "doubleOOB") {
-
-    if (!is.null(newdata) && (object@sampsize != nrow(newdata))) {
-      stop(paste(
-        "Attempting to do OOB predictions on a dataset which doesn't match the",
-        "training data!"
-      ))
-      return(NA)
-    }
 
     if (!object@doubleBootstrap) {
       stop(paste(
@@ -1814,33 +1907,23 @@ predict.forestry <- function(object,
       } else {
         processed_x <- object@processed_dta$processed_x
       }
-
-      rcppPrediction <- tryCatch({
-        rcpp_OBBPredictionsInterface(object@forest,
-                                     processed_x,  # Give null for the dataframe
-                                     TRUE, # Tell predict we don't have an existing dataframe
-                                     TRUE,
-                                     weightMatrix,
-                                     exact
-        )
-      }, error = function(err) {
-        print(err)
-        return(NULL)
-      })
-    } else {
-      rcppPrediction <- tryCatch({
-        rcpp_OBBPredictionsInterface(object@forest,
-                                     processed_x,
-                                     TRUE, # Give dataframe flag
-                                     TRUE,
-                                     weightMatrix,
-                                     exact
-        )
-      }, error = function(err) {
-        print(err)
-        return(NULL)
-      })
     }
+
+    rcppPrediction <- tryCatch({
+      rcpp_OBBPredictionsInterface(object@forest,
+                                   processed_x,  # Give null for the dataframe
+                                   TRUE, # Tell predict we don't have an existing dataframe
+                                   TRUE,
+                                   weightMatrix,
+                                   exact,
+                                   useTrainingIndices,
+                                   trainingIndices
+      )
+    }, error = function(err) {
+      print(err)
+      return(NULL)
+    })
+
 
   } else {
     rcppPrediction <- tryCatch({
@@ -1852,7 +1935,9 @@ predict.forestry <- function(object,
                                exact = exact,
                                returnWeightMatrix = weightMatrix,
                                use_weights = use_weights,
-                               tree_weights = tree_weights)
+                               use_hold_out_idx = FALSE,
+                               tree_weights = tree_weights,
+                               hold_out_idx = c(-1))
     }, error = function(err) {
       print(err)
       return(NULL)
@@ -1876,6 +1961,11 @@ predict.forestry <- function(object,
     rcppPrediction$predictions <- rcppPrediction$predictions*object@colSd[length(object@colSd)] +
       object@colMeans[length(object@colMeans)]
   }
+
+  # If we have a weightMatrix for the training Idx set, pass that back only
+  #if (!is.null(trainingIdx)) {
+  #  rcppPrediction$weightMatrix <- rcppPrediction$weightMatrix[trainingIdx,]
+  #}
 
   if (aggregation == "average" && weightMatrix) {
     return(rcppPrediction[c(1,2)])
@@ -2158,7 +2248,9 @@ getOOBpreds <- function(object,
                                                    TRUE,
                                                    doubleOOB,
                                                    FALSE,
-                                                   TRUE)
+                                                   TRUE,
+                                                   FALSE,
+                                                   c(-1))
 
     # If we have scaled the observations, we want to rescale the predictions
     if (object@scale) {
@@ -3083,7 +3175,7 @@ relinkCPP_prt <- function(object) {
 
     tryCatch({
       # Now we have to decide whether we use reconstruct tree or reconstructforests
-      if (class(object)[1] == "forestry") {
+      if (inherits(object,"forestry")) {
         if(!length(object@R_forest))
           stop("Forest was saved without first calling `forest <- make_savable(forest)`. ",
                "This forest cannot be reconstructed.")
@@ -3149,7 +3241,7 @@ relinkCPP_prt <- function(object) {
 
         object@forest <- forest_and_df_ptr$forest_ptr
         object@dataframe <- forest_and_df_ptr$data_frame_ptr
-      } else if (class(object)[1] == "multilayerForestry") {
+      } else if (inherits(object,"multilayerForestry")) {
         #print("Got past filtering")
 
         if(!length(object@R_forests))
@@ -3257,9 +3349,9 @@ relinkCPP_prt <- function(object) {
 make_savable <- function(object) {
     # We check if it is either a forestry object, or a multilayer forestry object
     # and save it accordingly
-    if (class(object)[1] == "forestry") {
+    if (inherits(object, "forestry")) {
       object@R_forest <- CppToR_translator(object@forest)
-    } else if (class(object)[1] == "multilayerForestry") {
+    } else if (inherits(object,"multilayerForestry")) {
       object@R_forests <- rcpp_multilayer_CppToR_translator(object@forest)
       object@gammas <- rcpp_gammas_translator(object@forest)
       object@R_residuals <- rcpp_residuals_translator(object@forest)
