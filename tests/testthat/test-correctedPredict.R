@@ -17,18 +17,19 @@ test_that('Bias corrections', {
 
   preds <- predict(forest, newdata = x, aggregation = "oob")
 
-  rmse <- sqrt(mean((preds - y)^2))
+  rmse <- sqrt(mean((preds - y[,1])^2))
 
   # Now do some bias corrected predictions with the forest ---------------------
   pred.bc2 <- correctedPredict(forest,
+                               newdata = x,
                                nrounds = 5)
 
-  rmse.bc2 <- sqrt(mean((pred.bc2 - y)^2))
+  rmse.bc2 <- sqrt(mean((pred.bc2$test.preds - y[,1])^2))
 
-  expect_equal(length(pred.bc2), 1000)
+  expect_equal(length(pred.bc2$test.preds), 1000)
 
 
-  expect_gt(rmse, rmse.bc2)
+  expect_gt(rmse.bc2,rmse)
 
   # Try the iris data ----------------------------------------------------------
 
@@ -53,7 +54,7 @@ test_that('Bias corrections', {
                               nrounds = 1)
   pred.bc3
 
-  rmse.bc3 <- sqrt(mean((pred.bc3 - y)^2))
+  rmse.bc3 <- sqrt(mean((pred.bc3$test.preds - y)^2))
 
 
 
@@ -84,7 +85,7 @@ test_that('Bias corrections', {
 
   params <- list(ntree = 1000,
                  groups=as.factor(c(rep(1,50), rep(2,50))),
-                 minTreesPerGroup = 400,
+                 minTreesPerFold = 400,
                  monotonicConstraints = c(rep(1,2),rep(0,3),1),
                  seed = 12312
                  )
@@ -110,7 +111,7 @@ test_that('Bias corrections', {
 
     # Make sure parameters are the same as in the params list
     expect_equal(rf_i@ntree, params$ntree)
-    expect_equal(rf_i@minTreesPerGroup, params$minTreesPerGroup)
+    expect_equal(rf_i@minTreesPerFold, params$minTreesPerFold)
     expect_equal(all.equal(rf_i@monotonicConstraints, params$monotonicConstraints),TRUE)
     expect_equal(all.equal(as.factor(rf_i@groups), params$groups),TRUE)
   }
