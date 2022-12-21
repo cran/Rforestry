@@ -52,6 +52,7 @@ forestry::forestry(
   size_t minTreesPerFold,
   size_t foldSize,
   bool hasNas,
+  bool naDirection,
   bool linear,
   bool symmetric,
   double overfitPenalty,
@@ -78,9 +79,11 @@ forestry::forestry(
   this->_splitMiddle = splitMiddle;
   this->_maxObs = maxObs;
   this->_hasNas = hasNas;
+  this->_naDirection = naDirection;
   this->_linear = linear;
   this->_overfitPenalty = overfitPenalty;
   this->_doubleTree = doubleTree;
+  this->_naDirection = naDirection;
   this->_minTreesPerFold = minTreesPerFold;
   this->_foldSize = foldSize;
   this->_symmetric = symmetric;
@@ -149,9 +152,10 @@ void forestry::addTrees(size_t ntree) {
   // This is called with ntree = 0 only when loading a saved forest.
   // When minTreesPerFold takes precedence over ntree, we need to make sure to
   // train 0 trees when ntree = 0, otherwise this messes up the reconstruction of the forest
+  size_t numGroups = (*std::max_element(getTrainingData()->getGroups()->begin(),
+                                        getTrainingData()->getGroups()->end()));
+
   if ((ntree != 0) && (getminTreesPerFold() > 0)) {
-    size_t numGroups = (*std::max_element(getTrainingData()->getGroups()->begin(),
-                                          getTrainingData()->getGroups()->end()));
 
     size_t numFolds = ((size_t) std::ceil((double) numGroups / (double) getFoldSize()));
 
@@ -243,6 +247,7 @@ void forestry::addTrees(size_t ntree) {
                   getminTreesPerFold(),
                   i,
                   getSampleSize(),
+                  (ntree != 0) && (getTrainingData()->getGroups()->at(0) != 0) ? numGroups : 0,
                   isReplacement(),
                   getOOBhonest(),
                   getDoubleBootstrap(),
@@ -252,7 +257,6 @@ void forestry::addTrees(size_t ntree) {
                   foldMemberships,
                   getTrainingData()
                   );
-
 
           // Set the smart pointers to use the returned indices
           splitSampleIndex.reset(
@@ -291,6 +295,7 @@ void forestry::addTrees(size_t ntree) {
                 getSplitMiddle(),
                 getMaxObs(),
                 gethasNas(),
+                getNaDirection(),
                 getlinear(),
                 getSymmetric(),
                 getOverfitPenalty(),
@@ -317,6 +322,7 @@ void forestry::addTrees(size_t ntree) {
                     getSplitMiddle(),
                     getMaxObs(),
                     gethasNas(),
+                    getNaDirection(),
                     getlinear(),
                     getSymmetric(),
                     getOverfitPenalty(),
@@ -473,6 +479,7 @@ std::unique_ptr< std::vector<double> > forestry::predict(
                   getTrainingData(),
                   weightMatrix,
                   getlinear(),
+                  getNaDirection(),
                   seed + i,
                   getMinNodeSizeToSplitAvg()
               );
@@ -486,6 +493,7 @@ std::unique_ptr< std::vector<double> > forestry::predict(
                   getTrainingData(),
                   weightMatrix,
                   getlinear(),
+                  getNaDirection(),
                   seed + i,
                   getMinNodeSizeToSplitAvg()
               );
@@ -640,6 +648,7 @@ std::unique_ptr< std::vector<double> > forestry::predict(
 std::vector<double> forestry::predictOOB(
     std::vector< std::vector<double> >* xNew,
     arma::Mat<double>* weightMatrix,
+    std::vector<size_t>* treeCounts,
     bool doubleOOB,
     bool exact,
     std::vector<size_t> &training_idx
@@ -783,6 +792,8 @@ std::vector<double> forestry::predictOOB(
           for (size_t i = 0; i < numTrainingRows; i++) {
             (*weightMatrix)(j,i) = (*weightMatrix)(j,i) / outputOOBCount[j];
           }
+            // Set the counts for this tree
+            (*treeCounts)[j] = outputOOBCount[j];
         }
       }
     }
@@ -799,6 +810,7 @@ std::vector<double> forestry::predictOOB(
           for (size_t i = 0; i < numTrainingRows; i++) {
             (*weightMatrix)(j,i) = (*weightMatrix)(j,i) / outputOOBCount[j];
           }
+          (*treeCounts)[j] = outputOOBCount[j];
         }
       } else {
         outputOOBPrediction[j] = std::numeric_limits<double>::quiet_NaN();
@@ -1077,6 +1089,7 @@ void forestry::reconstructTrees(
     std::unique_ptr< std::vector< std::vector<double> >  > & split_vals,
     std::unique_ptr< std::vector< std::vector<int> >  > & naLeftCounts,
     std::unique_ptr< std::vector< std::vector<int> >  > & naRightCounts,
+    std::unique_ptr< std::vector< std::vector<int> >  > & naDefaultDirections,
     std::unique_ptr< std::vector< std::vector<size_t> >  > & averagingSampleIndex,
     std::unique_ptr< std::vector< std::vector<size_t> >  > & splittingSampleIndex,
     std::unique_ptr< std::vector< std::vector<double> >  > & weights){
@@ -1125,6 +1138,7 @@ void forestry::reconstructTrees(
                 getMaxDepth(),
                 getInteractionDepth(),
                 gethasNas(),
+                getNaDirection(),
                 getlinear(),
                 getOverfitPenalty(),
                 (*tree_seeds)[i],
@@ -1133,6 +1147,7 @@ void forestry::reconstructTrees(
                 (*split_vals)[i],
                 (*naLeftCounts)[i],
                 (*naRightCounts)[i],
+                (*naDefaultDirections)[i],
                 (*averagingSampleIndex)[i],
                 (*splittingSampleIndex)[i],
                 (*weights)[i]);
