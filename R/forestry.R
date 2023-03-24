@@ -1,5 +1,8 @@
 #' @useDynLib Rforestry, .registration = TRUE
 #' @importFrom Rcpp sourceCpp
+#' @importFrom stats predict
+#' @importFrom pROC roc
+#' @importFrom utils tail
 NULL
 
 #' @include R_preprocessing.R
@@ -28,6 +31,7 @@ training_data_checker <- function(x,
                                   interactionDepth,
                                   splitratio,
                                   OOBhonest,
+                                  doubleBootstrap,
                                   nthread,
                                   middleSplit,
                                   doubleTree,
@@ -37,8 +41,10 @@ training_data_checker <- function(x,
                                   featureWeights,
                                   deepFeatureWeights,
                                   observationWeights,
+                                  customSplitSample,
+                                  customAvgSample,
+                                  customExcludeSample,
                                   linear,
-                                  symmetric,
                                   scale,
                                   hasNas,
                                   naDirection
@@ -142,23 +148,78 @@ training_data_checker <- function(x,
     stop("There must be at least one non-zero weight in observationWeights")
   }
 
-  if (any(symmetric!=0) && linear) {
-    stop(paste0("Symmetric forests cannot be combined with linear aggregation",
-                " please set either symmetric = FALSE or linear = FALSE."))
-  }
-
-  if (any(symmetric!=0) && hasNas) {
-    stop(paste0("Symmetric forests cannot be combined with missing values",
-                " please impute the missing features before training a forest with symmetry"))
-  }
-
-  if (any(symmetric!=0) && scale) {
-    scale = FALSE
-    warning(paste0("As symmetry is implementing pseudo outcomes, this causes ",
-                   " problems when the Y values are scaled. Setting scale = FALSE"))
-  }
-
   observationWeights <- observationWeights/sum(observationWeights)
+
+  if (length(customSplitSample) != 0 || length(customAvgSample) != 0) {
+    message("When customSplitSample is set, other sampling parameters are ignored")
+
+    if (splitratio != 1 || OOBhonest) {
+      warning("When customSplitSample is set, other honesty implementations are ignored")
+    }
+
+    # Check that we provide splitting samples as well as averaging samples
+    if (length(customSplitSample) != ntree || length(customAvgSample) != ntree) {
+      stop("Custom splitting and averaging samples must be provided for every tree")
+    }
+
+    # Check that averaging sample and splitting samples are disjoint
+    for (i in 1:ntree) {
+      if (any(customAvgSample[[i]] %in% customSplitSample[[i]])) {
+        stop("Splitting and averaging samples must be disjoint")
+      }
+
+      # Check that provided samples are integers in the correct range
+      if (length(customSplitSample[[i]]) == 0 ||
+          any(customSplitSample[[i]] <= 0) ||
+          any(customSplitSample[[i]] %% 1 != 0) ||
+          any(customSplitSample[[i]] > nrow(x))) {
+        stop(
+          "customSplitSample must contain positive integers up to the number of observations in x"
+        )
+      }
+      if (length(customAvgSample[[i]]) == 0 ||
+          any(customAvgSample[[i]] <= 0) ||
+          any(customAvgSample[[i]] %% 1 != 0) ||
+          any(customAvgSample[[i]] > nrow(x))) {
+        stop(
+          "customAvgSample must contain positive integers up to the number of observations in x"
+        )
+      }
+    }
+    # Check excluded sample is disjoint from both splitting and averaging set
+    if (length(customExcludeSample) != 0) {
+      if (length(customExcludeSample) != ntree) {
+        stop("customExcludeSample must be equal in length to ntree")
+      }
+
+      for (i in 1:ntree) {
+        if (any(customExcludeSample[[i]] %in% customAvgSample[[i]])) {
+          stop("Excluded samples must be disjoint from averaging samples")
+        }
+        # Check that included samples are integers in the correct range
+        if (any(customExcludeSample[[i]] <= 0) || any(customExcludeSample[[i]] %% 1 != 0) ||
+            any(customExcludeSample[[i]] > nrow(x))) {
+          stop("customExcludeSample must contain positive integers up to the number of observations in x")
+        }
+      }
+    }
+
+    # Set OOB honest flag to be TRUE so we have proper prediction handling
+    OOBhonest=TRUE
+    doubleBootstrap = TRUE
+
+    # Now since we will pass to C++ the indices need to be 0-indexed, so convert
+    # from R 1-indexed indices to 0 indexed indices
+    for (i in 1:ntree) {
+      customAvgSample[[i]] = customAvgSample[[i]]-1
+      customSplitSample[[i]] = customSplitSample[[i]]-1
+    }
+    if (length(customExcludeSample) != 0) {
+      for (i in 1:length(customExcludeSample)) {
+        customExcludeSample[[i]] = customExcludeSample[[i]]-1
+      }
+    }
+  }
 
   # if the splitratio is 1, then we use adaptive rf and avgSampleSize is the
   # equal to the total sampsize
@@ -220,21 +281,6 @@ training_data_checker <- function(x,
     stop("splitratio must in between 0 and 1.")
   }
 
-  if (any(symmetric!=0)) {
-    if (length(which(symmetric!=0))>10) {
-      warning("Running symmetric splits in more than 10 features is very slow")
-    }
-    if (any(! (symmetric %in% c(0,1)))) {
-      stop("Entries of the symmetric argument must be zero one")
-    }
-  }
-
-  if (any(symmetric !=0 )) {
-    # for now don't scale when we run symmetric splitting since we use pseudo outcomes
-    # and wnat to retain the scaling of Y
-    scale <- FALSE
-  }
-
   if (!is.null(groups)) {
     if (!is.factor(groups)) {
       stop("groups must be supplied as a vector of factors")
@@ -244,6 +290,25 @@ training_data_checker <- function(x,
     }
     if (length(groups) != nrow(x)) {
       stop("Length of groups must equal the number of observations")
+    }
+
+    # Check that the custom samples come from disjoint groups
+    if (length(customSplitSample) != 0) {
+      # Check splitting and averaging have disjoint groups
+      for (i in 1:ntree) {
+        if (any(groups[customAvgSample[[i]]+1] %in% groups[customSplitSample[[i]]+1])) {
+          stop("Splitting and averaging samples must contain disjoint groups")
+        }
+      }
+      # Check customExcludeSample has disjoint groups
+      if (length(customExcludeSample) != 0) {
+        for (i in 1:ntree) {
+          if (any(groups[customExcludeSample[[i]] + 1]
+                  %in% groups[customAvgSample[[i]] + 1])) {
+            stop("Excluded samples must contain groups disjoint from those in the averaging samples")
+          }
+        }
+      }
     }
   }
 
@@ -296,6 +361,7 @@ training_data_checker <- function(x,
               "interactionDepth" = interactionDepth,
               "splitratio" = splitratio,
               "OOBhonest" = OOBhonest,
+              "doubleBootstrap" = doubleBootstrap,
               "nthread" = nthread,
               "groups" = groups,
               "middleSplit" = middleSplit,
@@ -306,6 +372,9 @@ training_data_checker <- function(x,
               "scale" = scale,
               "deepFeatureWeights" = deepFeatureWeights,
               "observationWeights" = observationWeights,
+              "customSplitSample" = customSplitSample,
+              "customAvgSample" = customAvgSample,
+              "customExcludeSample" = customExcludeSample,
               "hasNas" = hasNas,
               "naDirection" = naDirection
         ))
@@ -401,7 +470,6 @@ setClass(
     hasNas = "logical",
     naDirection = "logical",
     linear = "logical",
-    symmetric = "numeric",
     linFeats = "numeric",
     monotonicConstraints = "numeric",
     monotoneAvg = "logical",
@@ -410,6 +478,9 @@ setClass(
     deepFeatureWeights = "numeric",
     deepFeatureWeightsVariables = "numeric",
     observationWeights = "numeric",
+    customSplitSample = "list",
+    customAvgSample = "list",
+    customExcludeSample = "list",
     overfitPenalty = "numeric",
     doubleTree = "logical",
     groupsMapping = "list",
@@ -462,6 +533,22 @@ setClass(
 #' @param observationWeights Denotes the weights for each training observation
 #'   that determine how likely the observation is to be selected in each bootstrap sample.
 #'   This option is not allowed when sampling is done without replacement.
+#' @param customSplitSample List of vectors for user-defined splitting observations per tree. The vector at
+#'   index i contains the indices of the sampled splitting observations, with replacement allowed, for tree i.
+#'   This feature overrides other sampling parameters and must be set in conjunction with customAvgSample.
+#' @param customAvgSample List of vectors for user-defined averaging observations per tree. The vector at
+#'   index i contains the indices of the sampled splitting observations, with replacement allowed, for tree i.
+#'   This feature overrides other sampling parameters and must be set in conjunction with customSplitSample.
+#' @param customExcludeSample An optional list of vectors for user-defined excluded observations per tree. The vector at
+#'   index i contains the indices of the excluded observations for tree i. An observation is considered excluded if it does
+#'   not appear in the splitting or averaging set and has been explicitly withheld from being sampled for a tree.
+#'   Excluded observations are not considered out-of-bag, so when we call predict with aggregation = "oob",
+#'   when we predict for an observation, we will only use the predictions of trees in which the
+#'   observation was in the customSplitSample (and neither in the customAvgSample nor the customExcludeSample).
+#'   This parameter is optional even when customSplitSample and customAvgSample are set.
+#'   It is also optional at the tree level, so can have fewer than ntree entries. When given fewer than
+#'   ntree entries, for example K, the entries will be applied to the first K trees in the forest and
+#'   the remaining trees will have no excludedSamples.
 #' @param splitratio Proportion of the training data used as the splitting dataset.
 #'   It is a ratio between 0 and 1. If the ratio is 1 (the default), then the splitting
 #'   set uses the entire data, as does the averaging set---i.e., the standard Breiman RF setup.
@@ -519,14 +606,6 @@ setClass(
 #' @param linear Indicator that enables Ridge penalized splits and linear aggregation
 #'   functions in the leaf nodes. This is recommended for data with linear outcomes.
 #'   For implementation details, see: https://arxiv.org/abs/1906.06463. Default is FALSE.
-#' @param symmetric Used for the experimental feature which imposes strict symmetric
-#'   marginal structure on the predictions of the forest through only selecting
-#'   symmetric splits with symmetric aggregation functions. Should be a vector of size ncol(x) with a single
-#'   1 entry denoting the feature to enforce symmetry on. Defaults to all zeroes.
-#'   For version >= 0.9.0.83, we experimentally allow more than one feature to
-#'   enforce symmetry at a time. This should only be used for a small number of
-#'   features as it has a runtime that is exponential in the number of symmetric
-#'   features (O(N 2^|S|) where S is the set of symmetric features).
 #' @param linFeats A vector containing the indices of which features to split
 #'   linearly on when using linear penalized splits (defaults to use all numerical features).
 #' @param monotonicConstraints Specifies monotonic relationships between the continuous
@@ -635,6 +714,9 @@ forestry <- function(x,
                      featureWeights = NULL,
                      deepFeatureWeights = NULL,
                      observationWeights = NULL,
+                     customSplitSample = NULL,
+                     customAvgSample = NULL,
+                     customExcludeSample = NULL,
                      splitratio = 1,
                      OOBhonest = FALSE,
                      doubleBootstrap = if (OOBhonest)
@@ -648,7 +730,6 @@ forestry <- function(x,
                      middleSplit = FALSE,
                      maxObs = length(y),
                      linear = FALSE,
-                     symmetric = rep(0,ncol(x)),
                      linFeats = 0:(ncol(x)-1),
                      monotonicConstraints = rep(0, ncol(x)),
                      groups = NULL,
@@ -715,6 +796,15 @@ forestry <- function(x,
   if(is.null(observationWeights)) {
     observationWeights <- rep(1, nrow(x))
   }
+  if(is.null(customSplitSample)) {
+    customSplitSample <- list()
+  }
+  if(is.null(customAvgSample)) {
+    customAvgSample <- list()
+  }
+  if(is.null(customExcludeSample)) {
+    customExcludeSample <- list()
+  }
   updated_variables <-
     training_data_checker(
       x = x,
@@ -732,6 +822,7 @@ forestry <- function(x,
       interactionDepth = interactionDepth,
       splitratio = splitratio,
       OOBhonest = OOBhonest,
+      doubleBootstrap = doubleBootstrap,
       nthread = nthread,
       middleSplit = middleSplit,
       doubleTree = doubleTree,
@@ -741,8 +832,10 @@ forestry <- function(x,
       featureWeights = featureWeights,
       deepFeatureWeights = deepFeatureWeights,
       observationWeights = observationWeights,
+      customSplitSample = customSplitSample,
+      customAvgSample = customAvgSample,
+      customExcludeSample = customExcludeSample,
       linear = linear,
-      symmetric = symmetric,
       scale = scale,
       hasNas = hasNas,
       naDirection = naDirection)
@@ -829,12 +922,6 @@ forestry <- function(x,
       y <- (y-colMeans[ncol(processed_x)+1]) / colSd[ncol(processed_x)+1]
     }
 
-    # Get the symmetric feature if one is set
-    symmetricIndex <- 1
-    if (any(symmetric != 0)) {
-      symmetricIndex <- which(symmetric != 0)
-    }
-
     # Create rcpp object
     # Create a forest object
     forest <- tryCatch({
@@ -850,10 +937,12 @@ forestry <- function(x,
         deepFeatureWeights =  deepFeatureWeights,
         deepFeatureWeightsVariables = deepFeatureWeightsVariables,
         observationWeights = observationWeights,
+        customSplitSample = customSplitSample,
+        customAvgSample = customAvgSample,
+        customExcludeSample = customExcludeSample,
         monotonicConstraints = monotonicConstraints,
         groupMemberships = groupVector,
-        monotoneAvg = monotoneAvg,
-        symmetricIndices = symmetricIndex-1
+        monotoneAvg = monotoneAvg
       )
 
       rcppForest <- rcpp_cppBuildInterface(
@@ -887,16 +976,17 @@ forestry <- function(x,
         deepFeatureWeights,
         deepFeatureWeightsVariables,
         observationWeights,
+        customSplitSample,
+        customAvgSample,
+        customExcludeSample,
         monotonicConstraints,
         groupVector,
-        symmetricIndex-1,
         minTreesPerFold,
         foldSize,
         monotoneAvg,
         hasNas,
         naDirection,
         linear,
-        any(symmetric != 0),
         overfitPenalty,
         doubleTree,
         TRUE,
@@ -956,10 +1046,12 @@ forestry <- function(x,
           deepFeatureWeights =  deepFeatureWeights,
           deepFeatureWeightsVariables = deepFeatureWeightsVariables,
           observationWeights = observationWeights,
+          customSplitSample = customSplitSample,
+          customAvgSample = customAvgSample,
+          customExcludeSample = customExcludeSample,
           hasNas = hasNas,
           naDirection = naDirection,
           linear = linear,
-          symmetric = symmetric,
           linFeats = linFeats,
           monotonicConstraints = monotonicConstraints,
           monotoneAvg = monotoneAvg,
@@ -1018,12 +1110,6 @@ forestry <- function(x,
       y <- (y-colMeans[ncol(processed_x)+1]) / colSd[ncol(processed_x)+1]
     }
 
-    # Get the symmetric feature if one is set
-    symmetricIndex <- 1
-    if (any(symmetric != 0)) {
-      symmetricIndex <- which(symmetric != 0)
-    }
-
     # Create rcpp object
     # Create a forest object
     forest <- tryCatch({
@@ -1058,16 +1144,17 @@ forestry <- function(x,
         deepFeatureWeights =  deepFeatureWeights,
         deepFeatureWeightsVariables = deepFeatureWeightsVariables,
         observationWeights,
+        customSplitSample,
+        customAvgSample,
+        customExcludeSample,
         monotonicConstraints,
         groupVector,
-        symmetricIndices = symmetricIndex-1,
         minTreesPerFold,
         foldSize,
         monotoneAvg,
         hasNas,
         naDirection,
         linear,
-        any(symmetric != 0),
         overfitPenalty,
         doubleTree,
         TRUE,
@@ -1104,10 +1191,12 @@ forestry <- function(x,
           featureWeights = featureWeights,
           deepFeatureWeights = deepFeatureWeights,
           observationWeights = observationWeights,
+          customSplitSample = customSplitSample,
+          customAvgSample = customAvgSample,
+          customExcludeSample = customExcludeSample,
           hasNas = hasNas,
           naDirection = naDirection,
           linear = linear,
-          symmetric = symmetric,
           linFeats = linFeats,
           monotonicConstraints = monotonicConstraints,
           monotoneAvg = monotoneAvg,
@@ -1508,7 +1597,7 @@ predict.forestry <- function(object,
                                        nrow = nobs,
                                        ncol = terminalNodes[nobs+1,i])
       for (j in 1:nobs) {
-        sparse_rep_single_tree[j,terminalNodes[j,i]] <- 1
+        sparse_rep_single_tree[j,terminalNodes[j,i]+1] <- 1
       }
       sparse_rep <- cbind(sparse_rep, sparse_rep_single_tree)
     }
@@ -1563,49 +1652,6 @@ getOOB <- function(object,
     })
 
     return(rcppOOB)
-}
-
-# -- Calculate Splitting Proportions -------------------------------------------
-#' getSplitProps-forestry
-#' @name getSplitProps-forestry
-#' @rdname getSplitProps-forestry
-#' @description Retrieves the proportion of splits for each feature in the given
-#'  forestry object. These proportions are calculated as the number of splits
-#'  on feature i in the entire forest over total the number of splits in the
-#'  forest.
-#' @param object A trained model object of class "forestry".
-#' @return A vector of length equal to the number of columns
-#' @seealso \code{\link{forestry}}
-#' @export
-getSplitProps <- function(object) {
-
-  # Make forest saveable so we can access the tree data in R
-  object <- make_savable(object)
-
-  # Dataframe to hold the splitting counts for each tree
-  data <- data.frame(matrix(rep(0,
-                                object@ntree*length(object@processed_dta$featNames)),
-                            nrow = object@ntree))
-  # Store feat names
-  names(data) <- object@processed_dta$featNames
-
-  # Cycle through all trees and splits in each tree and tally the count for
-  # the respective feature split count
-  for (i in 1:nrow(data)) {
-    tree_vars <- object@R_forest[[i]]$var_id
-    for (j in 1:length(tree_vars)) {
-      if (tree_vars[j] > 0) {
-        data[i,tree_vars[j]] = data[i,tree_vars[j]]+1
-      }
-    }
-  }
-
-  # Aggregate by all trees inn forest
-  count_totals <- apply(data, 2, sum)
-
-  # Return normalized counts (i.e. the split proportions)
-  return(count_totals / sum(count_totals))
-
 }
 
 
@@ -1724,13 +1770,22 @@ getOOBpreds <- function(object,
 #'  when each feature is shuffled.
 #' @param object A `forestry` object.
 #' @param noWarning flag to not display warnings
-#' @note No seed is passed to this function so it is
-#'   not possible in the current implementation to replicate the vector
-#'   permutations used when measuring feature importance.
+#' @param metric A parameter to determine how the predictions of the forest with
+#'   a permuted variable are compared to the predictions of the standard forest.
+#'   Must be one of c("mse","auc","tnr"), "mse" gives the percentage increase in
+#'   mse when the feature is permuted, "auc" gives the percentage decrease in AUC
+#'   when the feature is permuted, and "tnr" gives the percentage decrease in
+#'   TNR when the TPR is 99\% when the feature is permuted.
+#' @param seed A parameter to seed the random number generator for shuffling
+#'   the features of X.
+#' @note Pass a seed to this function so it is
+#'   possible to replicate the vector permutations used when measuring feature importance.
 #' @return The variable importance of the forest.
 #' @export
 getVI <- function(object,
-                  noWarning) {
+                  noWarning,
+                  metric = "mse",
+                  seed = 1) {
   forest_checker(object)
     # Keep warning for small sample size
     if (!object@replace &&
@@ -1745,165 +1800,70 @@ getVI <- function(object,
       return(NA)
     }
 
-    rcppVI <- tryCatch({
-      return(rcpp_VariableImportanceInterface(object@forest))
-    }, error = function(err) {
-      print(err)
-      return(NA)
-    })
+    # Set seed for permutations
+    set.seed(seed)
 
-    return(rcppVI)
-  }
-
-# -- Calculate Confidence Interval estimates for a new feature -----------------
-#' getCI-forestry
-#' @rdname getCI-forestry
-#' @description For a new set of features, calculate the confidence intervals
-#'  for each new observation.
-#' @param object A `forestry` object.
-#' @param newdata A set of new observations for which we want to predict the
-#'  outcomes and use confidence intervals.
-#' @param level The confidence level at which we want to make our intervals. Default
-#'  is to use .95 which corresponds to 95 percentile confidence intervals.
-#' @param B Number of bootstrap draws to use when using method = "OOB-bootstrap"
-#' @param method A flag for the different ways to create the confidence intervals.
-#'  Right now we have two ways of doing this. One is the `OOB-bootstrap` flag which
-#'  uses many bootstrap pulls from the set of OOB trees then with these different
-#'  pulls, we use the set of trees to predict for the new feature and give the
-#'  confidence set over the many bootstrap draws. The other method- `OOB-conformal`-
-#'  creates intervals by taking the set of doubleOOB trees for each observation, and
-#'  using the predictions of these trees to give conformal intervals. So for an
-#'  observation obs_i, let S_i be the set of trees for which obs_i was in neither
-#'  the splitting set nor the averaging set (or the set of trees for which obs_i
-#'  was "doubleOOB"), we then predict for obs_i with only the trees in S_i.
-#'  doubleOOB_tree_preds <- predict(S_i, obs_i):
-#'  Then CI(obs_i, alpha = .95) = quantile(doubleOOB_tree_preds - y_i, probs = .95).
-#'  The `local-conformal` option takes the residuals of each training point (using)
-#'  OOB predictions, and then uses the weights of the random forest to determine
-#'  the quantiles of the residuals in the local neighborhood of the predicted point.
-#'  Default is `OOB-conformal`.
-#' @param noWarning flag to not display warnings
-#' @return The confidence intervals for each observation in newdata.
-#' @export
-getCI <- function(object,
-                  newdata,
-                  level = .95,
-                  B = 100,
-                  method = "OOB-conformal",
-                  noWarning = FALSE) {
-
-  if ((method == "OOB-conformal") && !(object@OOBhonest && object@doubleBootstrap)) {
-    stop("We cannot do OOB-conformal intervals unless both OOBhonest and doubleBootstrap are TRUE")
-  }
-
-  if ((method == "OOB-bootstrap") && !(object@OOBhonest)) {
-    stop("We cannot do OOB-bootstrap intervals unless OOBhonest is TRUE")
-  }
-
-  if ((method == "local-conformal") && !(object@OOBhonest)) {
-    stop("We cannot do local-conformal intervals unless OOBhonest is TRUE")
-  }
-
-  # Check the Rforestry object
-  forest_checker(object)
-
-  # Check the newdata
-  newdata <- testing_data_checker(object, newdata, object@hasNas)
-  newdata <- as.data.frame(newdata)
-  processed_x <- preprocess_testing(newdata,
-                                    object@categoricalFeatureCols,
-                                    object@categoricalFeatureMapping)
-
-  if (method == "OOB-bootstrap") {
-    #warning("OOB-bootstrap not implemented")
-
-    # Now we do B bootstrap pulls of the trees in order to do prediction
-    # intervals for newdata
-    prediction_array <- data.frame(matrix(nrow = nrow(newdata), ncol = B))
-
-    for (i in 1:B) {
-      bootstrap_i <- sample(x = (1:object@ntree),
-                            size = object@ntree,
-                            replace = TRUE)
-      pred_i <- predict(object, newdata = newdata, trees = bootstrap_i)
-      prediction_array[,i] <- pred_i
+    if (!(metric %in% c("mse","auc","tnr"))) {
+      stop("metric must be one of mse, auc, or tnr")
     }
-    quantiles <- apply(prediction_array,
-                       MARGIN = 1,
-                       FUN = quantile,
-                       probs = c((1-level) / 2, 1 - (1-level) / 2))
 
-    predictions <- list("Predictions" = predict(object, newdata = newdata),
-                        "CI.upper" = quantiles[2,],
-                        "CI.lower" = quantiles[1,],
-                        "Level" = level)
-
-    return(predictions)
-  } else if (method == "OOB-conformal") {
-    # Get double OOB predictions and the residuals
-    y_pred <- predict(object, aggregation = "doubleOOB")
-    if (object@scale) {
-      res <- y_pred - (object@processed_dta$y*object@colSd[length(object@colSd)] +
-        object@colMeans[length(object@colMeans)])
-    } else {
-      res <- y_pred - object@processed_dta$y
+    if (metric %in% c("auc","tnr")) {
+      if (length(unique(object@processed_dta$y)) != 2) {
+        stop("forest must be trained for binary classification if the metric is set to be auc or tnr")
+      }
     }
 
 
-    # Get (1-level) / 2 and 1 - (1-level) / 2 quantiles of the residuals
-    quantiles <- quantile(res, probs = c((1-level) / 2, 1 - (1-level) / 2))
-
-    # Get predictions on newdata
-    predictions_new <- predict(object, newdata)
-
-    predictions <- list("Predictions" = predictions_new,
-                        "CI.upper" = predictions_new + unname(quantiles[2]),
-                        "CI.lower" = predictions_new + unname(quantiles[1]),
-                        "Level" = level)
-    return(predictions)
-  } else if (method == "local-conformal") {
-    OOB_preds <- predict(object, aggregation = "oob")
-    if (object@scale) {
-      OOB_res <- object@processed_dta$y*object@colSd[length(object@colSd)] +
-        object@colMeans[length(object@colMeans)] - OOB_preds
-    } else {
-      OOB_res <- object@processed_dta$y - OOB_preds
+    # In order to call predict, need categorical variables changed back to strings
+    x = object@processed_dta$processed_x
+    dummyIndex <- 1
+    for (categoricalFeatureCol in unlist(object@categoricalFeatureCols)) {
+      # levels
+      map = data.frame(strings = object@categoricalFeatureMapping[[dummyIndex]]$uniqueFeatureValues)
+      x[, categoricalFeatureCol] <- sapply(x[, categoricalFeatureCol], function(i){return(map$strings[i])})
+      dummyIndex <- dummyIndex + 1
     }
 
+    vi <- rep(NA, object@processed_dta$numColumns)
 
-    preds <- predict(object, newdata = newdata, weightMatrix = TRUE)
-    weights <- preds$weightMatrix
 
-    CI_local <- data.frame(lower = NA, upper = NA)
+    if (metric == "mse") {
+      oob_mse <- mean((predict(object, aggregation = "oob") - object@processed_dta$y)**2)
+      for (feat_i in 1:object@processed_dta$numColumns) {
+        x_mod = x
+        shuffled = x[sample(1:object@processed_dta$nObservations),feat_i]
+        x_mod[,feat_i] = shuffled
+        mse_i = mean((predict(object, newdata = x_mod, aggregation = "oob", seed = seed)
+                      - object@processed_dta$y)**2)
+        vi[feat_i] = sqrt(mse_i)/sqrt(oob_mse) - 1
+      }
+    } else if (metric %in% c("auc","tnr")) {
+      evalAUC <- function(truth, pred){
+        roc_model <- roc(response = truth, predictor = as.numeric(pred),quiet=TRUE)
+        idx <- tail(which(roc_model$sensitivities >= 0.99), 1)
+        tnr_model <- roc_model$specificities[idx]
+        return(round(c(roc_model$auc, tnr_model), 7))
+      }
 
-    for (i in 1:nrow(newdata)) {
-      cur_weights = weights[i,]
-      data.frame(OOB_res, cur_weights) %>%
-        dplyr::filter(cur_weights > 0) %>%
-        dplyr::arrange(OOB_res) %>%
-        dplyr::mutate(cur_weights = cumsum(cur_weights)) %>%
-        dplyr::filter(cur_weights >= .025, cur_weights <= .975) %>%
-        dplyr::summarise(
-          lower = dplyr::first(OOB_res),
-          upper = dplyr::last(OOB_res)
-        ) -> cur_bound
+      # Pull oob predictions and then cycle through and get the increase in different metrics
+      oob_predictions <- predict(object, aggregation = "oob")
+      metrics_oob <- evalAUC(truth = object@processed_dta$y, pred = oob_predictions)
+      for (feat_i in 1:object@processed_dta$numColumns) {
+        x_mod = x
+        shuffled = x[sample(1:object@processed_dta$nObservations),feat_i]
+        x_mod[,feat_i] = shuffled
+        predict_i = predict(object, newdata = x_mod, aggregation = "oob", seed = seed)
 
-      CI_local <- rbind(CI_local, cur_bound)
+        metrics_i = evalAUC(truth = object@processed_dta$y, pred = predict_i)
+
+        if (metric == "auc") {
+          vi[feat_i] = metrics_oob[1]/metrics_i[1] - 1
+        } else if (metric == "tnr") {
+          vi[feat_i] = metrics_oob[2]/metrics_i[2] - 1
+        }
+      }
     }
-
-    CI_local <- CI_local[-1,]
-
-    # Get predictions on newdata
-    predictions_new <- predict(object, newdata)
-
-    predictions <- list("Predictions" = predictions_new,
-                        "CI.lower" = predictions_new + CI_local$lower,
-                        "CI.upper" = predictions_new + CI_local$upper,
-                        "Level" = level)
-    return(predictions)
-  } else {
-    return(NA)
-  }
+    return(vi)
 }
 
 
@@ -1960,234 +1920,6 @@ predictInfo <- function(object,
 }
 
 
-# -- Perform bias corrected predictions ----------------------------------------
-#' correctedPredict-forestry
-#' @rdname correctedPredict-forestry
-#' @description Perform predictions given the forest using a bias correction based on
-#'   the out of bag predictions on the training set. By default we use a final linear
-#'   correction based on the leave-one-out hat matrix after doing `nrounds` nonlinear
-#'   corrections.
-#' @param object A `forestry` object.
-#' @param newdata Dataframe on which to predict. If this is left NULL, we
-#'   predict on the in sample data.
-#' @param feats A vector of feature indices which should be included in the bias
-#'   correction. By default only the outcome and predicted outcomes are used.
-#' @param observations A vector of observation indices from the original data set
-#'   that should be used for the bias correction regression. This can be used for
-#'   treatment effect estimation to carry out separate regressions for the
-#'   treatment and control group.
-#' @param nrounds The number of nonlinear bias correction steps which should be
-#'   taken. By default this is zero, so just a single linear correction is used.
-#' @param linear A flag indicating whether or not we want to do a final linear
-#'   bias correction after doing the nonlinear corrections. Default is TRUE.
-#' @param binary A flag indicating whether or not the linear correction should use
-#'   logistic regression for binary outcomes.
-#' @param aggregation Gives the aggregation to use for the first round of predictions.
-#' @param verbose flag which displays the bias of each qunatile.
-#' @param params.forestry A list of parameters to pass to the subsequent forestry
-#'  calls. Note that these forests will be trained on features of dimension
-#'  length(feats) + 1 as the correction forests are trained on Y ~ cbind(newdata[,feats], Y.hat).
-#'  so monotonic constraints etc given to this list should be of size length(feats) + 1.
-#'  Defaults to the standard forestry parameters for any parameters that are
-#'  not included in the list.
-#' @param keep_fits A flag that indicates if we should save the intermediate
-#'  forests used for the bias correction. If this is TRUE, we return a list of
-#'  the forestry objects for each iteration in the bias correction.
-#' @return A vector of the bias corrected predictions
-#' @examples
-#'  library(Rforestry)
-#'  set.seed(121235312)
-#'  n <- 50
-#'  p <- 10
-#'  x <- matrix(rnorm(n * p), ncol = p)
-#'  beta <- runif(p,min = 0, max = 1)
-#'  y <- as.matrix(x) %*% beta + rnorm(50)
-#'  x <- data.frame(x)
-#'
-#'  forest <- forestry(x =x,
-#'                     y = y[,1],
-#'                     OOBhonest = TRUE,
-#'                     doubleBootstrap = TRUE)
-#'  p <- predict(forest, x)
-#'
-#'  # Corrected predictions
-#'  pred.bc <- correctedPredict(forest,
-#'                              newdata = x,
-#'                              nrounds = 0)
-#'
-#' @export
-correctedPredict <- function(object,
-                             newdata,
-                             feats = NULL,
-                             observations = NULL,
-                             nrounds = 0,
-                             linear = TRUE,
-                             binary = FALSE,
-                             aggregation = ifelse(object@OOBhonest, "doubleOOB","oob") ,
-                             verbose = FALSE,
-                             params.forestry = list(),
-                             keep_fits = FALSE
-                             )
-
-{
-  # Check allowed settings for the bias correction
-  if (!linear & (nrounds < 1)) {
-    stop("We must do at least one round of bias corrections, with either linear = TRUE or nrounds > 0")
-  }
-
-  if (nrounds < 0 || nrounds %% 1 != 0) {
-    stop("ntree must be a non negative integer.")
-  }
-
-  if (!is.null(feats)) {
-    if (max(feats) > ncol(object@processed_dta$processed_x) ||
-        min(feats) < 1||
-        any(feats %% 1 != 0)) {
-      stop("feats must be a positive integer between 1 and ncol(x)")
-    }
-  }
-
-  Y=NULL
-  # Check the parameters match parameters for forestry or adaptiveForestry
-  valid_params <- names(as.list(args(Rforestry::forestry)))
-  if (any(!(names(params.forestry) %in% valid_params))) {
-    bad_params <- paste(names(params.forestry)[which((!(names(params.forestry) %in% valid_params)))])
-    stop(paste0("Invalid parameter in params.forestry: ",
-                bad_params," "))
-  }
-
-  # First get out of bag preds
-  train.preds <- predict(object = object,
-                         aggregation = aggregation)
-
-  test.preds <- predict(object = object,
-                        newdata = newdata)
-
-
-  if (is.null(observations)) {
-    observations <- 1:nrow(object@processed_dta$processed_x)
-  }
-
-  if (is.null(feats)) {
-    train.data <- data.frame(Y = object@processed_dta$y[observations],
-                              Y.hat = train.preds[observations])
-    test.data <- data.frame(Y.hat = test.preds)
-  } else {
-    train.data <- data.frame(object@processed_dta$processed_x[observations,feats],
-                             Y = object@processed_dta$y[observations],
-                             Y.hat = train.preds[observations])
-
-    # give adjust data the column names from feats
-    colnames(train.data) <- c(paste0("V",feats), "Y","Y.hat")
-
-    test.data <- data.frame(newdata[,feats],
-                            Y.hat = test.preds[observations])
-
-    # give adjust data the column names from feats
-    colnames(test.data) <- c(paste0("V",feats),"Y.hat")
-  }
-
-
-  # Store the RF fits
-  rf_fits <- list()
-
-  if (nrounds > 0) {
-    for (round_i in 1:nrounds) {
-      # Set right outcome to regress for regression step
-      y_reg <- train.data %>% dplyr::pull(Y)
-
-      # Fit the bias correction random forest
-      params.forestry.i <- params.forestry
-      params.forestry.i$x <- train.data %>% dplyr::select(-Y)
-      params.forestry.i$y <- y_reg
-      params.forestry.i$OOBhonest <- TRUE
-      fit.i <- do.call(forestry, c(params.forestry.i))
-      pred.i <- predict(fit.i,
-                        newdata = train.data %>% dplyr::select(-Y),
-                        aggregation = aggregation)
-
-      # Adjust the predicted Y hats in the training data
-      train.data[, ncol(train.data)] <- pred.i
-      names(train.data)[ncol(train.data)] <- "Y.hat"
-
-
-      # Adjust the predicted Y hats in the testing data
-      test.data[, ncol(test.data)] <- predict(fit.i,
-                                              newdata = test.data)
-      names(test.data)[ncol(test.data)] <- "Y.hat"
-
-      # Store the ith fit
-      if (keep_fits){
-        rf_fits[[round_i]] <- fit.i
-      }
-
-      if (verbose) {
-        print(paste0("Step ",round_i))
-        print(paste0("In sample R squared ", cor(train.data$Y.hat, train.data$Y) ^ 2))
-        print(paste0("SD of Y true: ", sd(train.data$Y), " SD of Y hat: ", sd(train.data$Y)))
-        print(paste0("SD of Y hat test ", sd(test.data$Y.hat)))
-      }
-
-    } # End nround loop
-  }
-
-  if (linear) {
-    if (binary) {
-      linear_fit <- glm(Y ~.,
-                          data = train.data,
-                          family = "binomial")
-
-      # Adjust the predicted Y hats in the training data
-      train.data[, ncol(train.data)] <- predict(linear_fit,
-                                                newdata = train.data,
-                                                type = "response")
-      names(train.data)[ncol(train.data)] <- "Y.hat"
-
-      # Adjust the predicted Y hats in the testing data
-      test.data[, ncol(test.data)] <- predict(linear_fit,
-                                              newdata = test.data,
-                                              type = "response")
-      names(test.data)[ncol(test.data)] <- "Y.hat"
-
-    } else {
-      linear_fit <- lm(Y ~., data=train.data)
-
-      # Adjust the predicted Y hats in the training data
-      train.data[, ncol(train.data)] <- predict(linear_fit,
-                                                newdata = train.data)
-      names(train.data)[ncol(train.data)] <- "Y.hat"
-
-
-      # Adjust the predicted Y hats in the testing data
-      test.data[, ncol(test.data)] <- predict(linear_fit,
-                                              newdata = test.data)
-      names(test.data)[ncol(test.data)] <- "Y.hat"
-    }
-
-
-    if (verbose) {
-      print(paste0("Step ",nrounds+1," linear correction "))
-      print(linear_fit$coefficients)
-
-      print(paste0("In sample R squared ", cor(train.data$Y.hat, train.data$Y) ^ 2))
-      print(paste0("SD of Y true: ", sd(train.data$Y), " SD of Y hat: ", sd(train.data$Y)))
-      print(paste0("SD of Y hat test ", sd(test.data$Y.hat)))
-    }
-  }
-
-
-  if (keep_fits) {
-    return(list("fits" = rf_fits,
-                "train.preds" = train.data[, ncol(train.data)] ,
-                "test.preds"=test.data[, ncol(test.data)]))
-  } else {
-    return(list("train.preds" = train.data[, ncol(train.data)] ,
-                "test.preds"=test.data[, ncol(test.data)]))
-  }
-}
-
-
-
 # -- Add More Trees ------------------------------------------------------------
 #' addTrees-forestry
 #' @rdname addTrees-forestry
@@ -2214,223 +1946,6 @@ addTrees <- function(object,
 
   }
 
-
-
-# -- Auto-Tune -----------------------------------------------------------------
-#' autoforestry-forestry
-#' @rdname autoforestry-forestry
-#' @inheritParams forestry
-#' @param sampsize The size of total samples to draw for the training data.
-#' @param num_iter Maximum iterations/epochs per configuration. Default is 1024.
-#' @param eta Downsampling rate. Default value is 2.
-#' @param verbose if tuning process in verbose mode
-#' @param seed random seed
-#' @param nthread Number of threads to train and predict the forest. The default
-#'   number is 0 which represents using all cores.
-#' @return A `forestry` object
-#' @import stats
-#' @export
-autoforestry <- function(x,
-                         y,
-                         sampsize = as.integer(nrow(x) * 0.75),
-                         num_iter = 1024,
-                         eta = 2,
-                         verbose = FALSE,
-                         seed = 24750371,
-                         nthread = 0) {
-  if (verbose) {
-    print("Start auto-tuning.")
-  }
-
-  # Creat a dummy tree just to reuse its data.
-  dummy_tree <-
-    forestry(
-      x,
-      y,
-      ntree = 1,
-      nodesizeSpl = nrow(x),
-      nodesizeAvg = nrow(x),
-      scale=FALSE
-    )
-
-  # Number of unique executions of Successive Halving (minus one)
-  s_max <- as.integer(log(num_iter) / log(eta))
-
-  # Total number of iterations (without reuse) per execution of
-  # successive halving (n,r)
-  B <- (s_max + 1) * num_iter
-
-  if (verbose) {
-    print(
-      paste(
-        "Hyperband will run successive halving in",
-        s_max,
-        "times, with",
-        B,
-        "iterations per execution."
-      )
-    )
-  }
-
-  # Begin finite horizon hyperband outlerloop
-  models <- vector("list", s_max + 1)
-  models_OOB <- vector("list", s_max + 1)
-
-  set.seed(seed)
-
-  for (s in s_max:0) {
-    if (verbose) {
-      print(paste("Hyperband successive halving round", s_max + 1 - s))
-    }
-
-    # Initial number of configurations
-    n <- as.integer(ceiling(B / num_iter / (s + 1) * eta ^ s))
-
-    # Initial number of iterations to run configurations for
-    r <- num_iter * eta ^ (-s)
-
-    if (verbose) {
-      print(paste(">>> Total number of configurations:", n))
-      print(paste(
-        ">>> Number of iterations per configuration:",
-        as.integer(r)
-      ))
-    }
-
-    # Begin finite horizon successive halving with (n,r)
-    # Generate parameters:
-    allConfigs <- data.frame(
-      mtry = sample(1:ncol(x), n, replace = TRUE),
-      min_node_size_spl = NA, #sample(1:min(30, nrow(x)), n, replace = TRUE),
-      min_node_size_ave = NA, #sample(1:min(30, nrow(x)), n, replace = TRUE),
-      splitratio = runif(n, min = 0.1, max = 1),
-      replace = sample(c(TRUE, FALSE), n, replace = TRUE),
-      middleSplit = sample(c(TRUE, FALSE), n, replace = TRUE)
-    )
-
-    min_node_size_spl_raw <- floor(allConfigs$splitratio * sampsize *
-                                     rbeta(n, 1, 3))
-    allConfigs$min_node_size_spl <- ifelse(min_node_size_spl_raw == 0, 1,
-                                           min_node_size_spl_raw)
-    min_node_size_ave <- floor((1 - allConfigs$splitratio) * sampsize *
-                                 rbeta(n, 1, 3))
-    allConfigs$min_node_size_ave <- ifelse(min_node_size_ave == 0, 1,
-                                           min_node_size_ave)
-
-    if (verbose) {
-      print(paste(">>>", n, " configurations have been generated."))
-    }
-
-    val_models <- vector("list", nrow(allConfigs))
-    r_old <- 1
-    for (j in 1:nrow(allConfigs)) {
-      tryCatch({
-        val_models[[j]] <- forestry(
-          x = x,
-          y = y,
-          ntree = r_old,
-          mtry = allConfigs$mtry[j],
-          nodesizeSpl = allConfigs$min_node_size_spl[j],
-          nodesizeAvg = allConfigs$min_node_size_ave[j],
-          splitratio = allConfigs$splitratio[j],
-          replace = allConfigs$replace[j],
-          sampsize = sampsize,
-          nthread = nthread,
-          middleSplit = allConfigs$middleSplit[j],
-          reuseforestry = dummy_tree,
-          scale=FALSE
-        )
-      }, error = function(err) {
-        val_models[[j]] <- NULL
-      })
-    }
-
-    if (s != 0) {
-      for (i in 0:(s - 1)) {
-        # Run each of the n_i configs for r_i iterations and keep best
-        # n_i/eta
-        n_i <- as.integer(n * eta ^ (-i))
-        r_i <- as.integer(r * eta ^ i)
-        r_new <- r_i - r_old
-
-        # if (verbose) {
-        #   print(paste("Iterations", i))
-        #   print(paste("Total number of configurations:", n_i))
-        #   print(paste("Number of iterations per configuration:", r_i))
-        # }
-
-        val_losses <- vector("list", nrow(allConfigs))
-
-        # Iterate to evaluate each parameter combination and cut the
-        # parameter pools in half every iteration based on its score
-        for (j in 1:nrow(allConfigs)) {
-          if (r_new > 0 && !is.null(val_models[[j]])) {
-            val_models[[j]] <- addTrees(val_models[[j]], r_new)
-          }
-          if (!is.null(val_models[[j]])) {
-            val_losses[[j]] <- getOOB(val_models[[j]], noWarning = TRUE)
-            if (is.na(val_losses[[j]])) {
-              val_losses[[j]] <- Inf
-            }
-          } else {
-            val_losses[[j]] <- Inf
-          }
-        }
-
-        r_old <- r_i
-
-        val_losses_idx <-
-          sort(unlist(val_losses), index.return = TRUE)
-        val_top_idx <- val_losses_idx$ix[0:as.integer(n_i / eta)]
-        allConfigs <- allConfigs[val_top_idx,]
-        val_models <- val_models[val_top_idx]
-        gc()
-        rownames(allConfigs) <- 1:nrow(allConfigs)
-
-        # if (verbose) {
-        #   print(paste(length(val_losses_idx$ix) - nrow(allConfigs),
-        #               "configurations have been eliminated."))
-        # }
-      }
-    }
-    # End finite horizon successive halving with (n,r)
-    if (!is.null(val_models[[1]])) {
-      best_OOB <- getOOB(val_models[[1]], noWarning = TRUE)
-      if (is.na(best_OOB)) {
-        stop()
-        best_OOB <- Inf
-      }
-    } else {
-      stop()
-      best_OOB <- Inf
-    }
-    if (verbose) {
-      print(paste(">>> Successive halving ends and the best model is saved."))
-      print(paste(">>> OOB:", best_OOB))
-    }
-
-    if (!is.null(val_models[[1]]))
-      models[[s + 1]] <- val_models[[1]]
-    models_OOB[[s + 1]] <- best_OOB
-
-  }
-
-  # End finite horizon hyperband outlerloop and sort by performance
-  model_losses_idx <- sort(unlist(models_OOB), index.return = TRUE)
-
-  if (verbose) {
-    print(
-      paste(
-        "Best model is selected from best-performed model in",
-        s_max,
-        "successive halving, with OOB",
-        models_OOB[model_losses_idx$ix[1]]
-      )
-    )
-  }
-
-  return(models[[model_losses_idx$ix[1]]])
-}
 
 # -- Save RF -----------------------------------------------------
 #' save RF
@@ -2461,10 +1976,6 @@ loadForestry <- function(filename){
   name <- base::load(file = filename, envir = environment())
   rf <- get(name)
 
-  # Check if we are loading an old model
-  if (!("symmetric" %in% names(attributes(rf)))) {
-    rf@symmetric <- rep(0,rf@processed_dta$numColumns)
-  }
   rf <- relinkCPP_prt(rf)
   return(rf)
 }
@@ -2563,14 +2074,13 @@ relinkCPP_prt <- function(object) {
       deepFeatureWeights = object@deepFeatureWeights,
       deepFeatureWeightsVariables = object@deepFeatureWeightsVariables,
       observationWeights = object@observationWeights,
+      customSplitSample = object@customSplitSample,
+      customAvgSample = object@customAvgSample,
+      customExcludeSample = object@customExcludeSample,
       monotonicConstraints = object@monotonicConstraints,
       groupMemberships = as.integer(object@groups),
       monotoneAvg = object@monotoneAvg,
       linear = object@linear,
-      symmetric = object@symmetric,
-      symmetricIndex = as.integer(ifelse(
-        any(object@symmetric != 0), which(object@symmetric != 0), 0
-      )),
       overfitPenalty = object@overfitPenalty,
       doubleTree = object@doubleTree
     )
@@ -2635,8 +2145,8 @@ make_savable <- function(object) {
 .onAttach <- function( ... )
 {
   Lib <- dirname(system.file(package = "Rforestry"))
-  version <- utils::packageDescription("Rforestry", lib.loc = Lib)$Version
-  BuildDate <- utils::packageDescription("Rforestry", lib.loc = Lib)$Built
+  version <- utils::packageDescription("Rforestry")$Version
+  BuildDate <- utils::packageDescription("Rforestry")$Built
 
   message <- paste("## \n##  Rforestry (Version ", version, ", Build Date: ", BuildDate, ")\n",
                    "##  See https://github.com/forestry-labs for additional documentation.\n",

@@ -23,6 +23,9 @@ forestry(
   featureWeights = NULL,
   deepFeatureWeights = NULL,
   observationWeights = NULL,
+  customSplitSample = NULL,
+  customAvgSample = NULL,
+  customExcludeSample = NULL,
   splitratio = 1,
   OOBhonest = FALSE,
   doubleBootstrap = if (OOBhonest) TRUE else FALSE,
@@ -33,7 +36,6 @@ forestry(
   middleSplit = FALSE,
   maxObs = length(y),
   linear = FALSE,
-  symmetric = rep(0, ncol(x)),
   linFeats = 0:(ncol(x) - 1),
   monotonicConstraints = rep(0, ncol(x)),
   groups = NULL,
@@ -106,6 +108,25 @@ The default is to use uniform probabilities.}
 that determine how likely the observation is to be selected in each bootstrap sample.
 This option is not allowed when sampling is done without replacement.}
 
+\item{customSplitSample}{List of vectors for user-defined splitting observations per tree. The vector at
+index i contains the indices of the sampled splitting observations, with replacement allowed, for tree i.
+This feature overrides other sampling parameters and must be set in conjunction with customAvgSample.}
+
+\item{customAvgSample}{List of vectors for user-defined averaging observations per tree. The vector at
+index i contains the indices of the sampled splitting observations, with replacement allowed, for tree i.
+This feature overrides other sampling parameters and must be set in conjunction with customSplitSample.}
+
+\item{customExcludeSample}{An optional list of vectors for user-defined excluded observations per tree. The vector at
+index i contains the indices of the excluded observations for tree i. An observation is considered excluded if it does
+not appear in the splitting or averaging set and has been explicitly withheld from being sampled for a tree.
+Excluded observations are not considered out-of-bag, so when we call predict with aggregation = "oob",
+when we predict for an observation, we will only use the predictions of trees in which the
+observation was in the customSplitSample (and neither in the customAvgSample nor the customExcludeSample).
+This parameter is optional even when customSplitSample and customAvgSample are set.
+It is also optional at the tree level, so can have fewer than ntree entries. When given fewer than
+ntree entries, for example K, the entries will be applied to the first K trees in the forest and
+the remaining trees will have no excludedSamples.}
+
 \item{splitratio}{Proportion of the training data used as the splitting dataset.
 It is a ratio between 0 and 1. If the ratio is 1 (the default), then the splitting
 set uses the entire data, as does the averaging set---i.e., the standard Breiman RF setup.
@@ -157,15 +178,6 @@ between two feature values. (Default = FALSE)}
 \item{linear}{Indicator that enables Ridge penalized splits and linear aggregation
 functions in the leaf nodes. This is recommended for data with linear outcomes.
 For implementation details, see: https://arxiv.org/abs/1906.06463. Default is FALSE.}
-
-\item{symmetric}{Used for the experimental feature which imposes strict symmetric
-marginal structure on the predictions of the forest through only selecting
-symmetric splits with symmetric aggregation functions. Should be a vector of size ncol(x) with a single
-1 entry denoting the feature to enforce symmetry on. Defaults to all zeroes.
-For version >= 0.9.0.83, we experimentally allow more than one feature to
-enforce symmetry at a time. This should only be used for a small number of
-features as it has a runtime that is exponential in the number of symmetric
-features (O(N 2^|S|) where S is the set of symmetric features).}
 
 \item{linFeats}{A vector containing the indices of which features to split
 linearly on when using linear penalized splits (defaults to use all numerical features).}

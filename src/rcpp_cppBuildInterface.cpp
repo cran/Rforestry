@@ -1,5 +1,5 @@
 // [[Rcpp::plugins(cpp11)]]
-#include "DataFrame.h"
+#include "dataFrame.h"
 #include "forestryTree.h"
 #include "RFNode.h"
 #include "forestry.h"
@@ -29,10 +29,12 @@ SEXP rcpp_cppDataFrameInterface(
     Rcpp::NumericVector deepFeatureWeights,
     Rcpp::NumericVector deepFeatureWeightsVariables,
     Rcpp::NumericVector observationWeights,
+    Rcpp::List customSplitSample,
+    Rcpp::List customAvgSample,
+    Rcpp::List customExcludeSample,
     Rcpp::NumericVector monotonicConstraints,
     Rcpp::NumericVector groupMemberships,
-    bool monotoneAvg,
-    Rcpp::NumericVector symmetricIndices
+    bool monotoneAvg
 ){
 
   try {
@@ -92,6 +94,24 @@ SEXP rcpp_cppDataFrameInterface(
         )
     );
 
+    std::unique_ptr<std::vector< std::vector<size_t> > > customSplitSampleRcpp (
+        new std::vector< std::vector<size_t> >(
+            Rcpp::as< std::vector< std::vector<size_t> > >(customSplitSample)
+        )
+    );
+
+    std::unique_ptr<std::vector< std::vector<size_t> > > customAvgSampleRcpp (
+        new std::vector< std::vector<size_t> >(
+            Rcpp::as< std::vector< std::vector<size_t> > >(customAvgSample)
+        )
+    );
+
+    std::unique_ptr<std::vector< std::vector<size_t> > > customExcludeSampleRcpp (
+        new std::vector< std::vector<size_t> >(
+            Rcpp::as< std::vector< std::vector<size_t> > >(customExcludeSample)
+        )
+    );
+
     std::unique_ptr< std::vector<int> > monotonicConstraintsRcpp (
         new std::vector<int>(
             Rcpp::as< std::vector<int> >(monotonicConstraints)
@@ -101,12 +121,6 @@ SEXP rcpp_cppDataFrameInterface(
     std::unique_ptr< std::vector<size_t> > groupMembershipsRcpp (
         new std::vector<size_t>(
             Rcpp::as< std::vector<size_t> >(groupMemberships)
-        )
-    );
-
-    std::unique_ptr< std::vector<size_t> > symmetricIndicesRcpp (
-        new std::vector<size_t>(
-            Rcpp::as< std::vector<size_t> >(symmetricIndices)
         )
     );
 
@@ -122,10 +136,12 @@ SEXP rcpp_cppDataFrameInterface(
         std::move(deepFeatureWeightsRcpp),
         std::move(deepFeatureWeightsVariablesRcpp),
         std::move(observationWeightsRcpp),
+        std::move(customSplitSampleRcpp),
+        std::move(customAvgSampleRcpp),
+        std::move(customExcludeSampleRcpp),
         std::move(monotonicConstraintsRcpp),
         std::move(groupMembershipsRcpp),
-        (bool) monotoneAvg,
-        std::move(symmetricIndicesRcpp)
+        (bool) monotoneAvg
     );
 
     Rcpp::XPtr<DataFrame> ptr(trainingData, true) ;
@@ -172,16 +188,17 @@ SEXP rcpp_cppBuildInterface(
   Rcpp::NumericVector deepFeatureWeights,
   Rcpp::NumericVector deepFeatureWeightsVariables,
   Rcpp::NumericVector observationWeights,
+  Rcpp::List customSplitSample,
+  Rcpp::List customAvgSample,
+  Rcpp::List customExcludeSample,
   Rcpp::NumericVector monotonicConstraints,
   Rcpp::NumericVector groupMemberships,
-  Rcpp::NumericVector symmetricIndices,
   int minTreesPerFold,
   int foldSize,
   bool monotoneAvg,
   bool hasNas,
   bool naDirection,
   bool linear,
-  bool symmetric,
   double overfitPenalty,
   bool doubleTree,
   bool existing_dataframe_flag,
@@ -219,12 +236,10 @@ SEXP rcpp_cppBuildInterface(
         hasNas,
         naDirection,
         linear,
-        symmetric,
         (double) overfitPenalty,
         doubleTree
       );
 
-      // delete(testFullForest);
       Rcpp::XPtr<forestry> ptr(testFullForest, true) ;
       R_RegisterCFinalizerEx(
         ptr,
@@ -298,6 +313,24 @@ SEXP rcpp_cppBuildInterface(
           )
       );
 
+      std::unique_ptr<std::vector< std::vector<size_t> > > customSplitSampleRcpp (
+          new std::vector< std::vector<size_t> >(
+              Rcpp::as< std::vector< std::vector<size_t> > >(customSplitSample)
+          )
+      );
+
+      std::unique_ptr<std::vector< std::vector<size_t> > > customAvgSampleRcpp (
+          new std::vector< std::vector<size_t> >(
+              Rcpp::as< std::vector< std::vector<size_t> > >(customAvgSample)
+          )
+      );
+
+      std::unique_ptr<std::vector< std::vector<size_t> > > customExcludeSampleRcpp (
+          new std::vector< std::vector<size_t> >(
+              Rcpp::as< std::vector< std::vector<size_t> > >(customExcludeSample)
+          )
+      );
+
       std::unique_ptr< std::vector<int> > monotoneConstraintsRcpp (
           new std::vector<int>(
               Rcpp::as< std::vector<int> >(monotonicConstraints)
@@ -307,12 +340,6 @@ SEXP rcpp_cppBuildInterface(
       std::unique_ptr< std::vector<size_t> > groupMembershipsRcpp (
           new std::vector<size_t>(
               Rcpp::as< std::vector<size_t> >(groupMemberships)
-          )
-      );
-
-      std::unique_ptr< std::vector<size_t> > symmetricIndicesRcpp (
-          new std::vector<size_t>(
-              Rcpp::as< std::vector<size_t> >(symmetricIndices)
           )
       );
 
@@ -328,10 +355,12 @@ SEXP rcpp_cppBuildInterface(
           std::move(deepFeatureWeightsRcpp),
           std::move(deepFeatureWeightsVariablesRcpp),
           std::move(observationWeightsRcpp),
+          std::move(customSplitSampleRcpp),
+          std::move(customAvgSampleRcpp),
+          std::move(customExcludeSampleRcpp),
           std::move(monotoneConstraintsRcpp),
           std::move(groupMembershipsRcpp),
-          (bool) monotoneAvg,
-          std::move(symmetricIndicesRcpp)
+          (bool) monotoneAvg
       );
 
       forestry* testFullForest = new forestry(
@@ -360,12 +389,9 @@ SEXP rcpp_cppBuildInterface(
         hasNas,
         naDirection,
         linear,
-        symmetric,
         (double) overfitPenalty,
         doubleTree
       );
-
-      // delete(testFullForest);
       Rcpp::XPtr<forestry> ptr(testFullForest, true) ;
       R_RegisterCFinalizerEx(
         ptr,
@@ -662,25 +688,6 @@ Rcpp::List rcpp_OBBPredictionsInterface(
 }
 
 // [[Rcpp::export]]
-Rcpp::List rcpp_VariableImportanceInterface(
-  SEXP forest
-){
-
-  try {
-    Rcpp::XPtr< forestry > testFullForest(forest);
-    std::vector<double> variableImportances = testFullForest->getVariableImportance();
-    Rcpp::NumericVector importances = Rcpp::wrap(variableImportances);
-    return Rcpp::List::create(importances);
-  } catch(std::runtime_error const& err) {
-    forward_exception_to_r(err);
-  } catch(...) {
-    ::Rf_error("c++ exception (unknown reason)");
-  }
-  return Rcpp::NumericVector::get_na();
-}
-
-
-// [[Rcpp::export]]
 double rcpp_getObservationSizeInterface(
     SEXP df
 ){
@@ -724,37 +731,18 @@ Rcpp::List rcpp_CppToR_translator(
     );
     (*testFullForest).fillinTreeInfo(forest_dta);
 
-    //   Print statements for debugging
-    // std::cout << "hello\n";
-    // std::cout.flush();
-
     // Return the lis of list. For each tree an element in the first list:
     Rcpp::List list_to_return;
 
     for(size_t i=0; i!=forest_dta->size(); i++){
       Rcpp::IntegerVector var_id = Rcpp::wrap(((*forest_dta)[i]).var_id);
-
-      // std::cout << "var_id\n";
-      // std::cout.flush();
-
       Rcpp::NumericVector split_val = Rcpp::wrap(((*forest_dta)[i]).split_val);
-
-      // std::cout << "split_val\n";
-      // std::cout.flush();
-
-
       Rcpp::IntegerVector averagingSampleIndex =
 	      Rcpp::wrap(((*forest_dta)[i]).averagingSampleIndex);
-
-      // std::cout << "averagingSampleIndex\n";
-      // std::cout.flush();
-
       Rcpp::IntegerVector splittingSampleIndex =
 	      Rcpp::wrap(((*forest_dta)[i]).splittingSampleIndex);
-
-      // std::cout << "splittingSampleIndex\n";
-      // std::cout.flush();
-
+      Rcpp::IntegerVector excludedSampleIndex =
+        Rcpp::wrap(((*forest_dta)[i]).excludedSampleIndex);
       Rcpp::IntegerVector naLeftCounts =
         Rcpp::wrap(((*forest_dta)[i]).naLeftCount);
 
@@ -774,24 +762,15 @@ Rcpp::List rcpp_CppToR_translator(
 			   Rcpp::Named("split_val") = split_val,
 			   Rcpp::Named("averagingSampleIndex") = averagingSampleIndex,
 			   Rcpp::Named("splittingSampleIndex") = splittingSampleIndex,
+			   Rcpp::Named("excludedSampleIndex") = excludedSampleIndex,
 			   Rcpp::Named("naLeftCounts") = naLeftCounts,
 			   Rcpp::Named("naRightCounts") = naRightCounts,
 			   Rcpp::Named("naDefaultDirections") = naDefaultDirections,
 			   Rcpp::Named("seed") = (*forest_dta)[i].seed, // Add the seeds to the list we return
                Rcpp::Named("weights") = predictWeights
         );
-
-      // std::cout << "finished list\n";
-      // std::cout.flush();
-
       list_to_return.push_back(list_i);
     }
-
-    // std::cout << "hello1\n";
-    // std::cout.flush();
-
-
-
     return list_to_return;
 
   } catch(std::runtime_error const& err) {
@@ -835,14 +814,15 @@ Rcpp::List rcpp_reconstructree(
   Rcpp::NumericVector deepFeatureWeights,
   Rcpp::NumericVector deepFeatureWeightsVariables,
   Rcpp::NumericVector observationWeights,
+  Rcpp::List customSplitSample,
+  Rcpp::List customAvgSample,
+  Rcpp::List customExcludeSample,
   Rcpp::NumericVector monotonicConstraints,
   Rcpp::NumericVector groupMemberships,
   bool monotoneAvg,
-  int symmetricIndex,
   bool hasNas,
   bool naDirection,
   bool linear,
-  Rcpp::NumericVector symmetric,
   double overfitPenalty,
   bool doubleTree
 ){
@@ -869,6 +849,9 @@ Rcpp::List rcpp_reconstructree(
   std::unique_ptr< std::vector< std::vector<size_t> > > splittingSampleIndex(
       new  std::vector< std::vector<size_t> >
   );
+  std::unique_ptr< std::vector< std::vector<size_t> > > excludedSampleIndex(
+      new  std::vector< std::vector<size_t> >
+  );
   std::unique_ptr< std::vector<unsigned int> > tree_seeds(
       new std::vector<unsigned int>
   );
@@ -876,11 +859,12 @@ Rcpp::List rcpp_reconstructree(
           new  std::vector< std::vector<double> >
   );
 
-    // Reserve space for each of the vectors equal to R_forest.size()
+  // Reserve space for each of the vectors equal to R_forest.size()
   var_ids->reserve(R_forest.size());
   split_vals->reserve(R_forest.size());
   averagingSampleIndex->reserve(R_forest.size());
   splittingSampleIndex->reserve(R_forest.size());
+  excludedSampleIndex->reserve(R_forest.size());
   naLeftCounts->reserve(R_forest.size());
   naRightCounts->reserve(R_forest.size());
   naDefaultDirections->reserve(R_forest.size());
@@ -902,20 +886,23 @@ Rcpp::List rcpp_reconstructree(
     splittingSampleIndex->push_back(
         Rcpp::as< std::vector<size_t> > ((Rcpp::as<Rcpp::List>(R_forest[i]))[3])
       );
-    naLeftCounts->push_back(
-        Rcpp::as< std::vector<int> > ((Rcpp::as<Rcpp::List>(R_forest[i]))[4])
+    excludedSampleIndex->push_back(
+        Rcpp::as< std::vector<size_t> > ((Rcpp::as<Rcpp::List>(R_forest[i]))[4])
     );
-    naRightCounts->push_back(
+    naLeftCounts->push_back(
         Rcpp::as< std::vector<int> > ((Rcpp::as<Rcpp::List>(R_forest[i]))[5])
     );
-    naDefaultDirections->push_back(
+    naRightCounts->push_back(
         Rcpp::as< std::vector<int> > ((Rcpp::as<Rcpp::List>(R_forest[i]))[6])
     );
+    naDefaultDirections->push_back(
+        Rcpp::as< std::vector<int> > ((Rcpp::as<Rcpp::List>(R_forest[i]))[7])
+    );
     tree_seeds->push_back(
-        Rcpp::as< unsigned int > ((Rcpp::as<Rcpp::List>(R_forest[i]))[7])
+        Rcpp::as< unsigned int > ((Rcpp::as<Rcpp::List>(R_forest[i]))[8])
     );
     predictWeights->push_back(
-            Rcpp::as< std::vector<double> > ((Rcpp::as<Rcpp::List>(R_forest[i]))[8])
+            Rcpp::as< std::vector<double> > ((Rcpp::as<Rcpp::List>(R_forest[i]))[9])
     );
   }
 
@@ -982,18 +969,27 @@ Rcpp::List rcpp_reconstructree(
           Rcpp::as< std::vector<double> >(observationWeights)
       )
   );
+  std::unique_ptr<std::vector< std::vector<size_t> > > customSplitSampleRcpp (
+      new std::vector< std::vector<size_t> >(
+          Rcpp::as< std::vector< std::vector<size_t> > >(customSplitSample)
+      )
+  );
+  std::unique_ptr<std::vector< std::vector<size_t> > > customAvgSampleRcpp (
+      new std::vector< std::vector<size_t> >(
+          Rcpp::as< std::vector< std::vector<size_t> > >(customAvgSample)
+      )
+  );
+  std::unique_ptr<std::vector< std::vector<size_t> > > customExcludeSampleRcpp (
+      new std::vector< std::vector<size_t> >(
+          Rcpp::as< std::vector< std::vector<size_t> > >(customExcludeSample)
+      )
+  );
   std::unique_ptr< std::vector<int> > monotonicConstraintsRcpp (
       new std::vector<int>(
           Rcpp::as< std::vector<int> >(monotonicConstraints)
       )
   );
   std::unique_ptr< std::vector<size_t> > groupMembershipsRcpp (
-      new std::vector<size_t>(
-          Rcpp::as< std::vector<size_t> >(groupMemberships)
-      )
-  );
-
-  std::unique_ptr< std::vector<size_t> > symmetricIndicesRcpp (
       new std::vector<size_t>(
           Rcpp::as< std::vector<size_t> >(groupMemberships)
       )
@@ -1011,10 +1007,12 @@ Rcpp::List rcpp_reconstructree(
     std::move(deepFeatureWeightsRcpp),
     std::move(deepFeatureWeightsVariablesRcpp),
     std::move(observationWeightsRcpp),
+    std::move(customSplitSampleRcpp),
+    std::move(customAvgSampleRcpp),
+    std::move(customExcludeSampleRcpp),
     std::move(monotonicConstraintsRcpp),
     std::move(groupMembershipsRcpp),
-    (bool) monotoneAvg,
-    std::move(symmetricIndicesRcpp)
+    (bool) monotoneAvg
   );
 
   forestry* testFullForest = new forestry(
@@ -1043,7 +1041,6 @@ Rcpp::List rcpp_reconstructree(
     (bool) hasNas,
     (bool) naDirection,
     (bool) linear,
-    (bool) symmetric,
     (double) overfitPenalty,
     doubleTree
   );
@@ -1057,10 +1054,10 @@ Rcpp::List rcpp_reconstructree(
                                    naDefaultDirections,
                                    averagingSampleIndex,
                                    splittingSampleIndex,
+                                   excludedSampleIndex,
                                    predictWeights
                                    );
 
-  // delete(testFullForest);
   Rcpp::XPtr<forestry> ptr(testFullForest, true);
   R_RegisterCFinalizerEx(
     ptr,
@@ -1117,7 +1114,5 @@ std::vector< std::vector<double> > rcpp_cppImputeInterface(
     &featureData,
     &weightMatrixT
   );
-  //auto returnX = Rcpp::as<Rcpp::NumericMatrix>(imputedX);
   return *imputedX;
-  //return weightMatrixT;
 }

@@ -6,10 +6,10 @@
 #include <string>
 #include <random>
 #include <chrono>
-#include "DataFrame.h"
+#include "dataFrame.h"
 #include "RFNode.h"
 #include "utils.h"
-#include <RcppArmadillo.h>
+#include <armadillo>
 
 class forestryTree {
 
@@ -29,13 +29,13 @@ public:
     size_t interactionDepth,
     std::unique_ptr< std::vector<size_t> > splittingSampleIndex,
     std::unique_ptr< std::vector<size_t> > averagingSampleIndex,
+    std::unique_ptr< std::vector<size_t> > excludedSampleIndex,
     std::mt19937_64& random_number_generator,
     bool splitMiddle,
     size_t maxObs,
     bool hasNas,
     bool naDirection,
     bool linear,
-    bool symmetric,
     double overfitPenalty,
     unsigned int seed
   );
@@ -52,6 +52,7 @@ public:
     size_t interactionDepth,
     std::unique_ptr< std::vector<size_t> > splittingSampleIndex,
     std::unique_ptr< std::vector<size_t> > averagingSampleIndex,
+    std::unique_ptr< std::vector<size_t> > excludedSampleIndex,
     double overfitPenalty
   );
 
@@ -95,6 +96,7 @@ public:
       std::vector<int> naDefaultDirections,
       std::vector<size_t> averagingSampleIndex,
       std::vector<size_t> splittingSampleIndex,
+      std::vector<size_t> excludedSampleIndex,
       std::vector<double> predictWeights);
 
   void recursive_reconstruction(
@@ -122,9 +124,6 @@ public:
     std::shared_ptr< arma::Mat<double> > stotal,
     bool monotone_splits,
     monotonic_info monotone_details,
-    bool trinary,
-    bool centerSplit,
-    symmetric_info symmetric_details,
     bool naDirection
   );
 
@@ -133,8 +132,6 @@ public:
       double &bestSplitValue,
       double &bestSplitLoss,
       int &bestSplitNaDir,
-      std::vector<double> &bestSplitLeftWts,
-      std::vector<double> &bestSplitRightWts,
       arma::Mat<double> &bestSplitGL,
       arma::Mat<double> &bestSplitGR,
       arma::Mat<double> &bestSplitSL,
@@ -147,13 +144,11 @@ public:
       bool splitMiddle,
       size_t maxObs,
       bool linear,
-      bool trinary,
       double overfitPenalty,
       std::shared_ptr< arma::Mat<double> > gtotal,
       std::shared_ptr< arma::Mat<double> > stotal,
       bool monotone_splits,
-      monotonic_info &monotone_details,
-      symmetric_info &symmetric_details
+      monotonic_info &monotone_details
   );
 
   void initializelinear(
@@ -183,6 +178,16 @@ public:
       std::vector<size_t> &allIndex
   );
 
+  void getDoubleOOBIndexExcluded(
+          std::vector<size_t> &outputOOBIndex,
+          std::vector<size_t> &allIndex
+  );
+
+  void getOOBIndexExcluded(
+          std::vector<size_t> &outputOOBIndex,
+          std::vector<size_t> &allIndex
+  );
+
   void getOOGIndex(
       std::vector<size_t> &outputOOBIndex,
       std::vector<size_t> groupMemberships,
@@ -200,15 +205,6 @@ public:
     std::vector< std::vector<double> >* xNew,
     arma::Mat<double>* weightMatrix,
     const std::vector<size_t>& training_idx
-  );
-
-  void getShuffledOOBPrediction(
-      std::vector<double> &outputOOBPrediction,
-      std::vector<size_t> &outputOOBCount,
-      DataFrame* trainingData,
-      size_t shuffleFeature,
-      std::mt19937_64& random_number_generator,
-      size_t nodesizeStrictAvg
   );
 
   size_t getMtry() {
@@ -251,6 +247,10 @@ public:
     return _averagingSampleIndex.get();
   }
 
+  std::vector<size_t>* getExcludedIndex() {
+    return _excludedSampleIndex.get();
+  }
+
   RFNode* getRoot() {
     return _root.get();
   }
@@ -271,12 +271,26 @@ public:
     return _naDirection;
   }
 
-  void assignNodeId(size_t& node_i) {
+  void assignNodeId(size_t& node_i,
+                    bool split) {
     node_i = ++_nodeCount;
+    if (split) {
+        _splitNodeCount++;
+    } else {
+        _leafNodeCount++;
+    }
   }
 
   size_t getNodeCount() {
     return _nodeCount;
+  }
+
+  size_t getSplitNodeCount() {
+      return _splitNodeCount;
+  }
+
+  size_t getLeafNodeCount() {
+      return _leafNodeCount;
   }
 
 private:
@@ -290,6 +304,7 @@ private:
   size_t _interactionDepth;
   std::unique_ptr< std::vector<size_t> > _averagingSampleIndex;
   std::unique_ptr< std::vector<size_t> > _splittingSampleIndex;
+  std::unique_ptr< std::vector<size_t> > _excludedSampleIndex;
   std::unique_ptr< RFNode > _root;
   bool _hasNas;
   bool _naDirection;
@@ -297,6 +312,8 @@ private:
   double _overfitPenalty;
   unsigned int _seed;
   size_t _nodeCount;
+  size_t _splitNodeCount;
+  size_t _leafNodeCount;
 };
 
 

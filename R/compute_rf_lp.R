@@ -1,7 +1,8 @@
 #' @include forestry.R
+#' @importFrom stats runif sd predict
+NULL
 
 # ---Computing lp distances-----------------------------------------------------
-#' comptute_lp
 #' @name compute_lp-forestry
 #' @title compute lp distances
 #' @rdname compute_lp-forestry
@@ -44,7 +45,7 @@
 #'                           newdata = x_test,
 #'                           feature = "Petal.Length",
 #'                           p = 2)
-#' @export
+#'@export
 compute_lp <- function(object,
                        newdata,
                        feature,
@@ -78,7 +79,7 @@ compute_lp <- function(object,
   if (!is.null(trainingIdx)) {
     args.predict$trainingIdx <- trainingIdx
   }
-  y_weights <- do.call(predict,args.predict)$weightMatrix
+  y_weights <- do.call(predict, args.predict)$weightMatrix
 
   if (is.factor(newdata[1, feature])) {
     # Get categorical feature mapping
@@ -92,7 +93,9 @@ compute_lp <- function(object,
     # processed_x <- preprocess_testing(newdata,
     #                                   object@categoricalFeatureCols,
     #                                   object@categoricalFeatureMapping)
-    factor_vals <- mapping[[1]][2][[1]]
+    feat_ind <- which(sapply(mapping, "[[", 1) == 
+                        which(names(train_set) == feature))
+    factor_vals <- mapping[[feat_ind]][2][[1]]
     map <- function(x) {
       return(which(factor_vals == x)[1])
     }

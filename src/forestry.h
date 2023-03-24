@@ -2,14 +2,13 @@
 #define HTECPP_RF_H
 
 #include "forestryTree.h"
-#include "DataFrame.h"
+#include "dataFrame.h"
 #include "forestryTree.h"
 #include "utils.h"
-#include <RcppArmadillo.h>
+#include <armadillo>
 #include <iostream>
 #include <vector>
 #include <string>
-
 
 
 class forestry {
@@ -44,7 +43,6 @@ public:
     bool hasNas,
     bool naDirection,
     bool linear,
-    bool symmetric,
     double overfitPenalty,
     bool doubleTree
   );
@@ -84,6 +82,7 @@ public:
       std::unique_ptr< std::vector< std::vector<int> >  > & naDefaultDirections,
       std::unique_ptr< std::vector< std::vector<size_t> >  > & averagingSampleIndex,
       std::unique_ptr< std::vector< std::vector<size_t> >  > & splittingSampleIndex,
+      std::unique_ptr< std::vector< std::vector<size_t> >  > & excludedSampleIndex,
       std::unique_ptr< std::vector< std::vector<double> >  > & weights);
 
   size_t getTotalNodeCount();
@@ -91,21 +90,6 @@ public:
   void calculateOOBError(
       bool doubleOOB = false
   );
-
-  void calculateVariableImportance();
-
-  std::vector<double> getVariableImportance() {
-    calculateVariableImportance();
-    calculateOOBError();
-
-    double OOB = getOOBError();
-    std::vector<double> OOBPercentages(getTrainingData()->getNumColumns());
-    //Find percentage changes in OOB error
-    for (size_t i = 0; i < getTrainingData()->getNumColumns(); i++) {
-      OOBPercentages[i] = ((*_variableImportance)[i] / OOB) - 1;
-    }
-    return OOBPercentages;
-  }
 
   double getOOBError() {
     calculateOOBError();
@@ -230,10 +214,6 @@ public:
     return _linear;
   }
 
-  bool getSymmetric() {
-    return _symmetric;
-  }
-
   double getOverfitPenalty() {
     return _overfitPenalty;
   }
@@ -241,6 +221,10 @@ public:
       std::vector< std::vector<double> >* xNew,
       arma::Mat<double>* weightMatrix
   );
+
+  void setDataframe(DataFrame * newDf) {
+      _trainingData = std::move(newDf);
+  }
 
 private:
   DataFrame* _trainingData;
@@ -264,7 +248,6 @@ private:
   size_t _nthread;
   double _OOBError;
   std::vector<double> _OOBpreds;
-  std::unique_ptr< std::vector<double> > _variableImportance;
   bool _splitMiddle;
   size_t _maxObs;
   size_t _minTreesPerFold;
@@ -272,7 +255,6 @@ private:
   bool _hasNas;
   bool _naDirection;
   bool _linear;
-  bool _symmetric;
   double _overfitPenalty;
   bool _doubleTree;
 };

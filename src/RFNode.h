@@ -1,13 +1,13 @@
 #ifndef FORESTRYCPP_RFNODE_H
 #define FORESTRYCPP_RFNODE_H
 
-#include <RcppArmadillo.h>
+#include <armadillo>
 #include <iostream>
 #include <vector>
 #include <string>
 #include <memory>
 #include <algorithm>
-#include "DataFrame.h"
+#include "dataFrame.h"
 #include "utils.h"
 
 class RFNode {
@@ -20,8 +20,6 @@ public:
           size_t averagingSampleIndexSize,
           size_t splittingSampleIndexSize,
           size_t nodeId,
-          bool trinary,
-          std::vector<double> weights,
           double predictWeight
   );
 
@@ -30,10 +28,9 @@ public:
       double splitValue,
       std::unique_ptr< RFNode > leftChild,
       std::unique_ptr< RFNode > rightChild,
-      bool trinary,
       size_t naLeftCount,
-      size_t naCenterCount,
       size_t naRightCount,
+      size_t nodeId,
       int naDefaultDirection
   );
 
@@ -42,7 +39,6 @@ public:
           DataFrame* trainingData,
           double lambda
   );
-
 
   void ridgePredict(
       std::vector<double> &outputPrediction,
@@ -68,6 +64,13 @@ public:
     unsigned int seed,
     size_t nodesizeStrictAvg,
     std::vector<size_t>* OOBIndex = NULL
+  );
+
+  void getPath(
+      std::vector<size_t> &path,
+      std::vector<double>* xNew,
+      DataFrame* trainingData,
+      unsigned int seed
   );
 
   void write_node_info(
@@ -137,14 +140,6 @@ public:
     return _nodeId;
   }
 
-  std::vector<double> getWeights() {
-    return _weights;
-  }
-
-  bool getTrinary() {
-    return _trinary;
-  }
-
   std::vector<size_t>* getAveragingIndex() {
     return _averagingSampleIndex.get();
   }
@@ -167,10 +162,8 @@ private:
   std::unique_ptr< std::vector<size_t> > _splittingSampleIndex;
   size_t _splitFeature;
   double _splitValue;
-  bool _trinary;
   double _predictWeight;
   arma::Mat<double> _ridgeCoefficients;
-  std::vector<double> _weights;
   std::unique_ptr< RFNode > _leftChild;
   std::unique_ptr< RFNode > _rightChild;
   size_t _naLeftCount;
