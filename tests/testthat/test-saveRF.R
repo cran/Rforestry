@@ -11,7 +11,6 @@ test_that("Tests that saving RF and laoding it works", {
   forest <- forestry(x,
                      y,
                      ntree = 3,
-                     nthread = 2,
                      saveable = FALSE)
   # testthat::expect_equal(forest@processed_dta, list())
   testthat::expect_equal(forest@R_forest, list())
@@ -22,7 +21,6 @@ test_that("Tests that saving RF and laoding it works", {
     sample.fraction = 1,
     splitratio = .03,
     ntree = 3,
-    nthread = 2,
     saveable = TRUE
   )
 
@@ -43,7 +41,6 @@ test_that("Tests that saving RF and laoding it works", {
     sample.fraction = 1,
     splitratio = 1,
     ntree = 3,
-    nthread = 2,
     saveable = TRUE,
     replace = FALSE
   )
@@ -65,17 +62,15 @@ test_that("Tests that saving RF and laoding it works", {
 
 
   # -- Actual saving and loading -----------------------------------------------
-  wd <- tempdir()
-
   y_pred_before <- predict(forest, x)
 
-  saveForestry(forest, filename = file.path(wd, "forest.Rda"))
+  saveForestry(forest, file = "forest.Rda")
   rm(forest)
-  forest_after <- loadForestry(file.path(wd, "forest.Rda"))
+  forest_after <- loadForestry("forest.Rda")
 
   y_pred_after <- predict(forest_after, x)
   testthat::expect_equal(y_pred_before, y_pred_after, tolerance = 1e-6)
 
-  file.remove(file.path(wd, "forest.Rda"))
+  file.remove("forest.Rda")
 })
 

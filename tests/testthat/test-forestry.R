@@ -30,22 +30,13 @@ test_that("Tests that random forest is working correctly", {
   # Mean Square Error
   skip_if_not_mac()
 
-  mean((y_pred - y) ^ 2)
-  expect_equal(mean((y_pred - y) ^ 2), 0.06466401683066609618056, tolerance = 1e-12)
+  expect_equal(mean((y_pred - y) ^ 2), 0.06476052, tolerance = 1e-6)
 
   # Test factors with missing obs and unused levels are correctly handled
   x$Species[1:70] <- NA
   forest <- forestry(
     x,
-    y, seed = 2,nthread = 1)
+    y, seed = 2)
   y_pred <- predict(forest, x, seed = 2)
-  # options(digits = 10)
-  # print(mean((y_pred - y) ^ 2))
-  expect_equal(mean((y_pred - y) ^ 2), 0.107300804721, tolerance = 1e-6)
-
-
-  # Test passing a bad parameter to forestry
-  expect_error(rf <- forestry( x = iris[,-1], y = iris[,1], seed = seed_i),
-               "A parameter passed is not assigned: object 'seed_i' not found\n")
-
+  expect_equal(mean((y_pred - y) ^ 2), 0.1027711, tolerance = 1e-6)
 })

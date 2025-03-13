@@ -1,31 +1,34 @@
-#include "utils.h"
+#include <Rcpp.h>
 #include <vector>
 #include <string>
 #include <iostream>
-#include <random>
-#include <algorithm>
-#include <cmath>
 
 void print_vector(
-    std::vector<size_t> v
+  std::vector<size_t> v
 ){
   for (auto i = v.begin(); i != v.end(); ++i){
-    // std::cout << *i << ' ';
+    Rcpp::Rcout << *i << ' ';
     // Rcpp's equivalent of std::flush
+    R_FlushConsole();
+    R_ProcessEvents();
+    R_CheckUserInterrupt();
   }
-  // std::cout << std::endl;
-  // std::cout << std::endl;
+  Rcpp::Rcout << std::endl;
+  Rcpp::Rcout << std::endl;
 }
 
 void print_vector(
     std::vector<unsigned int> v
 ){
   for (auto i = v.begin(); i != v.end(); ++i){
-    // std::cout << *i << ' ';
+    Rcpp::Rcout << *i << ' ';
     // Rcpp's equivalent of std::flush
+    R_FlushConsole();
+    R_ProcessEvents();
+    R_CheckUserInterrupt();
   }
-  // std::cout << std::endl;
-  // std::cout << std::endl;
+  Rcpp::Rcout << std::endl;
+  Rcpp::Rcout << std::endl;
 }
 
 
@@ -33,11 +36,14 @@ void print_vector(
     std::vector<double> v
 ){
   for (auto i = v.begin(); i != v.end(); ++i){
-    // std::cout << *i << ' ';
+    Rcpp::Rcout << *i << ' ';
     // Rcpp's equivalent of std::flush
+    R_FlushConsole();
+    R_ProcessEvents();
+    R_CheckUserInterrupt();
   }
-  // std::cout << std::endl;
-  // std::cout << std::endl;
+  Rcpp::Rcout << std::endl;
+  Rcpp::Rcout << std::endl;
 }
 
 int add_vector(
@@ -49,10 +55,3 @@ int add_vector(
   }
   return sum;
 }
-
-double square(
-  double x
-) {
-  return (x*x);
-}
-

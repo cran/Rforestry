@@ -21,22 +21,17 @@ test_that("Tests if OOB predictions are working correctly (normal setting)", {
   )
 
   # Test OOB predictions
-  expect_equal(mean((getOOBpreds(forest, noWarning = TRUE) -  iris[,1])^2), getOOB(forest), tolerance = 1e-5)
+  expect_equal(sum((getOOBpreds(forest) -  iris[,1])^2), getOOB(forest), tolerance = 1e-5)
 
   skip_if_not_mac()
-
-  expect_equal(all.equal(getOOBpreds(forest, noWarning = TRUE)[1:10], c(5.090343629238978095941, 4.663643797193019580050,
-                                                                        4.651080538830537847161, 4.876606650517940622080,
-                                                                        5.084682124151035154114, 5.346775151424274064027,
-                                                                        5.064028401318675598475, 5.064491903453301802074,
-                                                                        4.762799341542434561347, 4.790124445076102688290)), TRUE)
+  expect_equal(all.equal(getOOBpreds(forest)[1:2], c(5.092648, 4.664031), tolerance = 1e-6), TRUE)
 })
 
 
 test_that("Tests if OOB predictions are working correctly (extreme setting)", {
   x <- iris[, -1]
   y <- iris[, 1]
-  context('OOB Predictions extreme')
+  context('OOB Predictions')
   # Set seed for reproductivity
   set.seed(24750371)
 
@@ -56,7 +51,7 @@ test_that("Tests if OOB predictions are working correctly (extreme setting)", {
   )
 
   expect_warning(
-    testOOBpreds <- getOOBpreds(forest, noWarning = FALSE),
+    testOOBpreds <- getOOBpreds(forest, FALSE),
     "Samples are drawn without replacement and sample size is too big!"
   )
 

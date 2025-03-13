@@ -1,13 +1,10 @@
 #ifndef FORESTRYCPP_UTILS_H
 #define FORESTRYCPP_UTILS_H
 
-#include "dataFrame.h"
+#include <iostream>
 #include <vector>
 #include <string>
 #include <iostream>
-#include <random>
-#include <algorithm>
-#include <cmath>
 
 void print_vector(
   std::vector<size_t> v
@@ -25,9 +22,6 @@ int add_vector(
     std::vector<int>* v
 );
 
-double square(
-    double x
-);
 
 struct tree_info {
   std::vector< int > var_id;
@@ -35,37 +29,20 @@ struct tree_info {
   // observations in a leaf for a leaf node
   std::vector< long double > split_val;
   // contains the split values for regular nodes
-  std::vector< double > values;
-  // contains the weights used for prediction in each node
-  // 0.0 for interior nodes
-  std::vector< int > num_spl_samples;
-  // Counts of splitting samples at each node
-  std::vector< int > num_avg_samples;
-  // Contains the counts of averaging samples at each node
+  std::vector< int > leafAveidx;
+  // contains the indices of observations in a leaf.
+  std::vector< int > leafSplidx;
+  // contains the indices of observations in a leaf.
   std::vector< int > averagingSampleIndex;
   // contains the indices of the average set.
   std::vector< int > splittingSampleIndex;
   // contains the indices of the splitting set.
-  std::vector< int > excludedSampleIndex;
-  // contains the indices of the excluded set.
   std::vector< int > naLeftCount;
   // Contains the count of NA's which fell to the left for each split value
   // (-1 indicates leaf node, 0 indicates no NA's fell that way)
   std::vector< int > naRightCount;
   // Contains the count of NA's which fell to the right for each split value
   // (-1 indicates leaf node, 0 indicates no NA's fell that way)
-  std::vector< int > naDefaultDirection;
-  // Contains the default direction for all NA values per split node if
-  // naDirection == TRUE, -1 indicates left and 1 indicates right
-  size_t numLeafNodes;
-  size_t numSplitNodes;
-  // To help the Python API allocate space for the tree info,
-  // store the number of split nodes and number of leaf nodes
-  // (this allows us to calculate the size of each of the above vectors)
-  unsigned int seed;
-  // The seed that the tree was given (this uniquely identifies each tree
-  // so that we can tell them apart. Very important for prediction when
-  // exact = TRUE as we must aggregate the trees in the right order)
 };
 
 // Contains the information to help with monotonic constraints on splitting
@@ -78,18 +55,10 @@ struct monotonic_info {
 
   // These contain the upper and lower bounds on node means for the node
   // currently being split on. These are used to reject potential splits
-  // which do not respect the bounds, and therefore enforce global monotonic
+  // which do not respect the bounds, and therfore enforce global monotonic
   // bounds.
-  double upper_bound;
-  double lower_bound;
-
-  // This flag indicates whether or not to enforce monotonicity on the averaging
-  // set as well as the splitting set
-  bool monotoneAvg;
-
-  monotonic_info(){
-    monotoneAvg = false;
-  };
+  float upper_bound;
+  float lower_bound;
 };
 
 #endif //FORESTRYCPP_UTILS_H

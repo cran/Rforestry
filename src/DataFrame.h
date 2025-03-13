@@ -25,12 +25,7 @@ public:
     std::unique_ptr< std::vector<double> > deepFeatureWeights,
     std::unique_ptr< std::vector<size_t> > deepFeatureWeightsVariables,
     std::unique_ptr< std::vector<double> > observationWeights,
-    std::unique_ptr< std::vector< std::vector<size_t> > > customSplitSample,
-    std::unique_ptr< std::vector< std::vector<size_t> > > customAvgSample,
-    std::unique_ptr< std::vector< std::vector<size_t> > > customExcludeSample,
-    std::shared_ptr< std::vector<int> > monotonicConstraints,
-    std::unique_ptr< std::vector<size_t> > groupMemberships,
-    bool monotoneAvg
+    std::shared_ptr< std::vector<int> > monotonicConstraints
   );
 
   double getPoint(size_t rowIndex, size_t colIndex);
@@ -96,32 +91,12 @@ public:
     return _observationWeights.get();
   }
 
-  std::vector< std::vector<size_t> >* getCustomSplitSample() {
-    return _customSplitSample.get();
-  }
-
-  std::vector< std::vector<size_t> >* getCustomAvgSample() {
-    return _customAvgSample.get();
-  }
-
-  std::vector< std::vector<size_t> >* getCustomExcludeSample() {
-    return _customExcludeSample.get();
-  }
-
   std::vector<int>* getMonotonicConstraints() {
     return _monotonicConstraints.get();
   }
 
-  bool getMonotoneAvg() {
-    return _monotoneAvg;
-  }
-
   std::vector<size_t>* getRowNumbers() {
     return _rowNumbers.get();
-  }
-
-  std::vector<size_t>* getGroups() {
-    return _groupMemberships.get();
   }
 
   std::vector<size_t> get_all_row_idx(std::vector<size_t>* sampleIndex);
@@ -144,12 +119,7 @@ private:
   std::unique_ptr< std::vector<double> > _deepFeatureWeights;
   std::unique_ptr< std::vector<size_t> > _deepFeatureWeightsVariables;
   std::unique_ptr< std::vector<double> > _observationWeights;
-  std::unique_ptr< std::vector< std::vector<size_t> > > _customSplitSample;
-  std::unique_ptr< std::vector< std::vector<size_t> > > _customAvgSample;
-  std::unique_ptr< std::vector< std::vector<size_t> > > _customExcludeSample;
   std::shared_ptr< std::vector<int> > _monotonicConstraints;
-  std::unique_ptr< std::vector<size_t> > _groupMemberships;
-  bool _monotoneAvg;
 };
 
 

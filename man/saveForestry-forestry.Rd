@@ -13,9 +13,6 @@ saveForestry(object, filename, ...)
 
 \item{...}{additional arguments useful for specifying compression type and level}
 }
-\value{
-Saves the forest into filename.
-}
 \description{
 This wrapper function checks the forestry object, makes it
  saveable if needed, and then saves it.

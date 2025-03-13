@@ -12,7 +12,7 @@ preprocess_training(x, y)
 \item{y}{A vector of all training responses.}
 }
 \value{
-A list of two datasets along with necessary information that encodes
+A list of two datasets along with necessary information that encoding
   the preprocessing.
 }
 \description{

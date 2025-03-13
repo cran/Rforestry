@@ -20,8 +20,7 @@ test_that("Tests if ridgeRF works with minSplitGain", {
     nodesizeStrictAvg = 5,
     linear = TRUE,
     minSplitGain = 0.9,
-    overfitPenalty = 1000,
-    scale=FALSE
+    overfitPenalty = 1000
   )
   # Test predict
   y_pred <- predict(forest, x)
@@ -29,5 +28,5 @@ test_that("Tests if ridgeRF works with minSplitGain", {
   # Mean Square Error
   sum((y_pred - y) ^ 2)
 
-  expect_equal(sum((y_pred - y) ^ 2), 45.91750882593601090775, tolerance = 1e-12)
+  expect_equal(sum((y_pred - y) ^ 2), 45.91750882593600, tolerance = 1e-12)
 })

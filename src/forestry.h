@@ -2,13 +2,14 @@
 #define HTECPP_RF_H
 
 #include "forestryTree.h"
-#include "dataFrame.h"
+#include "DataFrame.h"
 #include "forestryTree.h"
 #include "utils.h"
-#include <armadillo>
+#include <RcppArmadillo.h>
 #include <iostream>
 #include <vector>
 #include <string>
+
 
 
 class forestry {
@@ -23,8 +24,6 @@ public:
     bool replace,
     size_t sampSize,
     double splitRatio,
-    bool OOBhonest,
-    bool doubleBootstrap,
     size_t mtry,
     size_t minNodeSizeSpt,
     size_t minNodeSizeAvg,
@@ -38,10 +37,7 @@ public:
     bool verbose,
     bool splitMiddle,
     size_t maxObs,
-    size_t minTreesPerFold,
-    size_t foldSize,
     bool hasNas,
-    bool naDirection,
     bool linear,
     double overfitPenalty,
     bool doubleTree
@@ -50,22 +46,9 @@ public:
   std::unique_ptr< std::vector<double> > predict(
     std::vector< std::vector<double> >* xNew,
     arma::Mat<double>* weightMatrix,
-    arma::Mat<double>* coefficients,
     arma::Mat<int>* terminalNodes,
     unsigned int seed,
-    size_t nthread,
-    bool exact,
-    bool use_weights,
-    std::vector<size_t>* tree_weights
-  );
-
-  std::vector<double> predictOOB(
-    std::vector< std::vector<double> >* xNew,
-    arma::Mat<double>* weightMatrix,
-    std::vector<size_t>* treeCounts,
-    bool doubleOOB,
-    bool exact,
-    std::vector<size_t> &training_idx
+    size_t nthread
   );
 
   void fillinTreeInfo(
@@ -74,32 +57,43 @@ public:
 
   void reconstructTrees(
       std::unique_ptr< std::vector<size_t> > & categoricalFeatureColsRcpp,
-      std::unique_ptr< std::vector<unsigned int> > & tree_seeds,
       std::unique_ptr< std::vector< std::vector<int> >  > & var_ids,
       std::unique_ptr< std::vector< std::vector<double> >  > & split_vals,
       std::unique_ptr< std::vector< std::vector<int> >  > & naLeftCounts,
       std::unique_ptr< std::vector< std::vector<int> >  > & naRightCounts,
-      std::unique_ptr< std::vector< std::vector<int> >  > & naDefaultDirections,
-      std::unique_ptr< std::vector< std::vector<size_t> >  > & averagingSampleIndex,
-      std::unique_ptr< std::vector< std::vector<size_t> >  > & splittingSampleIndex,
-      std::unique_ptr< std::vector< std::vector<size_t> >  > & excludedSampleIndex,
-      std::unique_ptr< std::vector< std::vector<double> >  > & weights);
+      std::unique_ptr< std::vector< std::vector<size_t> >  > & leafAveidxs,
+      std::unique_ptr< std::vector< std::vector<size_t> >  > & leafSplidxs,
+      std::unique_ptr< std::vector< std::vector<size_t> >  > &
+        averagingSampleIndex,
+      std::unique_ptr< std::vector< std::vector<size_t> >  > &
+        splittingSampleIndex);
 
   size_t getTotalNodeCount();
 
-  void calculateOOBError(
-      bool doubleOOB = false
-  );
+  void calculateOOBError();
+
+  void calculateVariableImportance();
+
+  std::vector<double> getVariableImportance() {
+    calculateVariableImportance();
+    calculateOOBError();
+
+    double OOB = getOOBError();
+    std::vector<double> OOBPercentages(getTrainingData()->getNumColumns());
+    //Find percentage changes in OOB error
+    for (size_t i = 0; i < getTrainingData()->getNumColumns(); i++) {
+      OOBPercentages[i] = ((*_variableImportance)[i] / OOB) - 1;
+    }
+    return OOBPercentages;
+  }
 
   double getOOBError() {
     calculateOOBError();
     return _OOBError;
   }
 
-  std::vector<double> getOOBpreds(
-      bool doubleOOB = false
-  ) {
-    calculateOOBError(doubleOOB);
+  std::vector<double> getOOBpreds() {
+    calculateOOBError();
     return _OOBpreds;
   }
 
@@ -158,14 +152,6 @@ public:
     return _splitRatio;
   }
 
-  bool getOOBhonest() {
-    return _OOBhonest;
-  }
-
-  bool getDoubleBootstrap() {
-    return _doubleBootstrap;
-  }
-
   bool isReplacement() {
     return _replace;
   }
@@ -194,20 +180,8 @@ public:
     return _maxObs;
   }
 
-  size_t getminTreesPerFold() {
-    return _minTreesPerFold;
-  }
-
-  size_t getFoldSize() {
-      return _foldSize;
-  }
-
   bool gethasNas() {
     return _hasNas;
-  }
-
-  bool getNaDirection() {
-    return _naDirection;
   }
 
   bool getlinear() {
@@ -222,18 +196,12 @@ public:
       arma::Mat<double>* weightMatrix
   );
 
-  void setDataframe(DataFrame * newDf) {
-      _trainingData = std::move(newDf);
-  }
-
 private:
   DataFrame* _trainingData;
   size_t _ntree;
   bool _replace;
   size_t _sampSize;
   double _splitRatio;
-  bool _OOBhonest;
-  bool _doubleBootstrap;
   size_t _mtry;
   size_t _minNodeSizeSpt;
   size_t _minNodeSizeAvg;
@@ -248,12 +216,10 @@ private:
   size_t _nthread;
   double _OOBError;
   std::vector<double> _OOBpreds;
+  std::unique_ptr< std::vector<double> > _variableImportance;
   bool _splitMiddle;
   size_t _maxObs;
-  size_t _minTreesPerFold;
-  size_t _foldSize;
   bool _hasNas;
-  bool _naDirection;
   bool _linear;
   double _overfitPenalty;
   bool _doubleTree;

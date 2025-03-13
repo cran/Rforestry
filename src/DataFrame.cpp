@@ -1,15 +1,15 @@
-#include "dataFrame.h"
+#include "DataFrame.h"
 
 DataFrame::DataFrame():
   _featureData(nullptr), _outcomeData(nullptr), _rowNumbers(nullptr),
   _categoricalFeatureCols(nullptr), _numericalFeatureCols(nullptr),
   _linearFeatureCols(nullptr), _numRows(0), _numColumns(0),
   _featureWeights(nullptr), _featureWeightsVariables(nullptr),  _deepFeatureWeights(nullptr),
-  _deepFeatureWeightsVariables(nullptr), _observationWeights(nullptr),
-  _customSplitSample(nullptr), _customAvgSample(nullptr), _customExcludeSample(nullptr),
-  _monotonicConstraints(nullptr), _groupMemberships(nullptr){}
+  _deepFeatureWeightsVariables(nullptr), _observationWeights(nullptr), _monotonicConstraints(nullptr){}
 
-DataFrame::~DataFrame(){};
+DataFrame::~DataFrame() {
+//  std::cout << "DataFrame() destructor is called." << std::endl;
+}
 
 DataFrame::DataFrame(
   std::shared_ptr< std::vector< std::vector<double> > > featureData,
@@ -23,12 +23,7 @@ DataFrame::DataFrame(
   std::unique_ptr<std::vector<double>> deepFeatureWeights,
   std::unique_ptr<std::vector<size_t>> deepFeatureWeightsVariables,
   std::unique_ptr< std::vector<double> > observationWeights,
-  std::unique_ptr< std::vector< std::vector<size_t> > > customSplitSample,
-  std::unique_ptr< std::vector< std::vector<size_t> > > customAvgSample,
-  std::unique_ptr< std::vector< std::vector<size_t> > > customExcludeSample,
-  std::shared_ptr< std::vector<int> > monotonicConstraints,
-  std::unique_ptr< std::vector<size_t> > groupMemberships,
-  bool monotoneAvg
+  std::shared_ptr< std::vector<int> > monotonicConstraints
 ) {
   this->_featureData = std::move(featureData);
   this->_outcomeData = std::move(outcomeData);
@@ -41,12 +36,7 @@ DataFrame::DataFrame(
   this->_deepFeatureWeights = std::move(deepFeatureWeights);
   this->_deepFeatureWeightsVariables = std::move(deepFeatureWeightsVariables);
   this->_observationWeights = std::move(observationWeights);
-  this->_customSplitSample = std::move(customSplitSample);
-  this->_customAvgSample = std::move(customAvgSample);
-  this->_customExcludeSample = std::move(customExcludeSample);
   this->_monotonicConstraints = std::move(monotonicConstraints);
-  this->_groupMemberships = std::move(groupMemberships);
-  this->_monotoneAvg = (bool) monotoneAvg;
 
   // define the row numbers to be the numbers from 1 to nrow:
   std::vector<size_t> rowNumberss;
@@ -157,7 +147,7 @@ double DataFrame::partitionMean(
   ) {
     accummulatedSum += getOutcomePoint(*it);
   }
-  return accummulatedSum / ((double) totalSampleSize);
+  return accummulatedSum / totalSampleSize;
 }
 
 std::vector<size_t> DataFrame::get_all_row_idx(

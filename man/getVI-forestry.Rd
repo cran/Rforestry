@@ -4,31 +4,18 @@
 \alias{getVI}
 \title{getVI-forestry}
 \usage{
-getVI(object, noWarning, metric = "mse", seed = 1)
+getVI(object, noWarning)
 }
 \arguments{
 \item{object}{A `forestry` object.}
 
 \item{noWarning}{flag to not display warnings}
-
-\item{metric}{A parameter to determine how the predictions of the forest with
-a permuted variable are compared to the predictions of the standard forest.
-Must be one of c("mse","auc","tnr"), "mse" gives the percentage increase in
-mse when the feature is permuted, "auc" gives the percentage decrease in AUC
-when the feature is permuted, and "tnr" gives the percentage decrease in
-TNR when the TPR is 99\% when the feature is permuted.}
-
-\item{seed}{A parameter to seed the random number generator for shuffling
-the features of X.}
-}
-\value{
-The variable importance of the forest.
 }
 \description{
-Calculate the percentage increase in OOB error of the forest
- when each feature is shuffled.
+Calculate increase in OOB for each shuffled feature for forest.
 }
 \note{
-Pass a seed to this function so it is
-  possible to replicate the vector permutations used when measuring feature importance.
+No seed is passed to this function so it is
+  not possible in the current implementation to replicate the vector
+  permutations used when measuring feature importance.
 }

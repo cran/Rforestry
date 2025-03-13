@@ -7,10 +7,7 @@
 relinkCPP_prt(object)
 }
 \arguments{
-\item{object}{an object of class `forestry`}
-}
-\value{
-Relinks the pointer to the correct C++ object.
+\item{object}{an object of class `forestry` or class `multilayerForestry`}
 }
 \description{
 When a `foresty` object is saved and then reloaded the Cpp
