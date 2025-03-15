@@ -1,4 +1,4 @@
-b6b4abeef5003414bb8961c41cbeb1bc *DESCRIPTION
+722faf761e262da43ed239ce2f1a26d1 *DESCRIPTION
 84dcc94da3adb52b53ae4fa38fe49e5d *LICENSE
 70d215741ad25c6cbf6a980852b57464 *NAMESPACE
 622c2b8ce509c7f89998d0520ac5d051 *R/R_preprocessing.R
@@ -60,7 +60,7 @@ d1b9c0837a954ff87bb5ed340853448e *tests/Comparisons/RFSpeedCompare.R
 3c99754e7c31cb9a4a7cffd210d57468 *tests/Comparisons/speed_tests/run_speed_test_now.R
 04b818856b1ea97e4749a5e72b24ff4f *tests/crashes/split_inconsistency.R
 2e46fb342247390466ea86df8189cb3d *tests/testthat.R
-c2aa15856f93b6dca5194a4de722161a *tests/testthat/setup.R
+fc2bdd9cd1cabae71fd68d9530c2bf4f *tests/testthat/setup.R
 78a1b06904ac4f32dac59c3c1a2e7544 *tests/testthat/test-OOBpredictions.R
 45f38a39f7aff185f8c08c6f5aaf49d1 *tests/testthat/test-autoforestry.R
 1d89c1de1ada0bb651ebbae2a7d01f5f *tests/testthat/test-backward_compatibility.R

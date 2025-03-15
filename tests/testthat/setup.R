@@ -3,7 +3,7 @@ is_mac <- function() {
 }
 
 skip_if_not_mac <- function() {
-  if(is_mac()) {
+  if(is_mac() && R.version[["arch"]] != "aarch64") {
     return(invisible(TRUE))
   }
 
